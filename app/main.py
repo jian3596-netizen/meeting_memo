@@ -22,6 +22,7 @@ from .models import (
     MeetingSummary,
     RegenerateRequest,
     StatusResponse,
+    VoiceprintEnrollRequest,
 )
 from .templates_prompts import TEMPLATES
 
@@ -95,6 +96,70 @@ def get_hotwords() -> Dict:
 def update_hotwords(req: HotwordsRequest) -> Dict:
     cleaned = db.set_hotwords(req.hotwords)
     return {"ok": True, "hotwords": cleaned, "count": len(cleaned)}
+
+
+# ---------------- 声纹（说话人自动识别） ----------------
+@app.get("/api/voiceprints")
+def get_voiceprints() -> Dict:
+    return {"voiceprints": db.list_voiceprints()}
+
+
+@app.delete("/api/voiceprints")
+def remove_voiceprint(name: str) -> Dict:
+    """删除某人的全部声纹模板（name 为查询参数）。"""
+    n = db.delete_voiceprints_by_name(name)
+    return {"ok": True, "deleted": n, "voiceprints": db.list_voiceprints()}
+
+
+@app.post("/api/meetings/{mid}/voiceprints")
+def enroll_voiceprint(mid: str, req: VoiceprintEnrollRequest) -> Dict:
+    """从某会议的某说话人注册声纹（一人多模板）：
+
+    聚合该说话人语音成一个声纹中心；若与此人已有某模板足够像（同设备）→ 合并增强，
+    否则（换设备/新来源）→ 新增一份模板。匹配时取此人所有模板的最高分。
+    """
+    m = _require(mid)
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="姓名不能为空")
+
+    from .asr import cosine, get_asr, merge_centroids
+    asr = get_asr()
+    if not hasattr(asr, "embed_spans"):
+        raise HTTPException(status_code=400, detail="当前 ASR 不支持声纹（需 ASR_PROVIDER=funasr）")
+
+    wav = m.get("processed_path")
+    if not wav or not Path(wav).exists():
+        raise HTTPException(status_code=404, detail="音频文件不存在（会议可能未处理完）")
+
+    spans = [
+        (r["start_ms"] / 1000.0, r["end_ms"] / 1000.0)
+        for r in db.get_segment_rows(mid)
+        if r["speaker"] == req.speaker
+    ]
+    if not spans:
+        raise HTTPException(status_code=400, detail=f"该会议中没有 {req.speaker} 的语音")
+
+    emb = asr.embed_spans(wav, spans)
+    if emb is None:
+        raise HTTPException(status_code=400, detail="提取声纹失败（该说话人有效语音太短）")
+
+    n_new = min(len(spans), config.VOICEPRINT_MAX_SEG)
+    existing = db.get_voiceprints_by_name(name)
+    best = None  # (score, template)
+    for t in existing:
+        s = cosine(emb, t["emb"])
+        if best is None or s > best[0]:
+            best = (s, t)
+    if best and best[0] >= config.VOICEPRINT_MERGE_THRESHOLD:
+        t = best[1]
+        merged = merge_centroids(t["emb"], t["sample_count"], emb, n_new)
+        db.update_voiceprint(t["id"], merged, t["sample_count"] + n_new)
+        action = "merged"  # 同设备：增强已有模板
+    else:
+        db.add_voiceprint(name, emb, n_new)
+        action = "added"   # 新设备/新来源：新增一份模板
+    return {"ok": True, "name": name, "action": action, "voiceprints": db.list_voiceprints()}
 
 
 @app.get("/api/meetings")

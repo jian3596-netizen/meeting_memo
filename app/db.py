@@ -94,12 +94,44 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS voiceprints (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,          -- 一个人可有多份模板（不同设备/来源），故不唯一
+    embedding TEXT NOT NULL,     -- JSON：192 维 L2 归一化声纹中心
+    sample_count INTEGER,        -- 由多少条语音聚合而来
+    created_at TEXT,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_voiceprints_name ON voiceprints(name);
 """
 
 
 def init_db() -> None:
     with closing(get_conn()) as conn:
+        _migrate_voiceprints(conn)
         conn.executescript(SCHEMA)
+        conn.commit()
+
+
+def _migrate_voiceprints(conn: sqlite3.Connection) -> None:
+    """旧版 voiceprints.name 有 UNIQUE 约束（单声纹）；多模板需去掉。原地重建保留数据。"""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='voiceprints'"
+    ).fetchone()
+    if row and "UNIQUE" in (row["sql"] or ""):
+        conn.executescript(
+            """
+            ALTER TABLE voiceprints RENAME TO _voiceprints_old;
+            CREATE TABLE voiceprints (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, embedding TEXT NOT NULL,
+                sample_count INTEGER, created_at TEXT, updated_at TEXT
+            );
+            INSERT INTO voiceprints SELECT id, name, embedding, sample_count, created_at, updated_at
+                FROM _voiceprints_old;
+            DROP TABLE _voiceprints_old;
+            """
+        )
         conn.commit()
 
 
@@ -295,3 +327,80 @@ def set_hotwords(words: List[str]) -> List[str]:
             cleaned.append(w)
     set_setting("hotwords", json.dumps(cleaned, ensure_ascii=False))
     return cleaned
+
+
+# ---------- voiceprints / 声纹（一人多模板） ----------
+def list_voiceprints() -> List[Dict[str, Any]]:
+    """按人聚合的概要，给前端展示：[{name, count(模板数), sample_count(总样本)}]。"""
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT name, COUNT(*) AS count, COALESCE(SUM(sample_count), 0) AS sample_count
+               FROM voiceprints GROUP BY name ORDER BY name"""
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_voiceprints() -> List[Dict[str, Any]]:
+    """全部模板（含向量），给匹配用：[{name, emb:list[float], sample_count}]。"""
+    with closing(get_conn()) as conn:
+        rows = conn.execute("SELECT name, embedding, sample_count FROM voiceprints").fetchall()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            out.append({
+                "name": r["name"],
+                "emb": json.loads(r["embedding"]),
+                "sample_count": r["sample_count"] or 1,
+            })
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return out
+
+
+def get_voiceprints_by_name(name: str) -> List[Dict[str, Any]]:
+    """某人的全部模板（含 id 与向量），给注册时"合并或新增"判断用。"""
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            "SELECT id, embedding, sample_count FROM voiceprints WHERE name=?", (name.strip(),)
+        ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            out.append({
+                "id": r["id"],
+                "emb": json.loads(r["embedding"]),
+                "sample_count": r["sample_count"] or 1,
+            })
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return out
+
+
+def add_voiceprint(name: str, emb: List[float], sample_count: int) -> None:
+    """新增一份模板。"""
+    now = _now()
+    with closing(get_conn()) as conn:
+        conn.execute(
+            """INSERT INTO voiceprints (id, name, embedding, sample_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (new_id(), name.strip(), json.dumps(emb), int(sample_count), now, now),
+        )
+        conn.commit()
+
+
+def update_voiceprint(vid: str, emb: List[float], sample_count: int) -> None:
+    """更新某份模板（合并增强时用）。"""
+    with closing(get_conn()) as conn:
+        conn.execute(
+            "UPDATE voiceprints SET embedding=?, sample_count=?, updated_at=? WHERE id=?",
+            (json.dumps(emb), int(sample_count), _now(), vid),
+        )
+        conn.commit()
+
+
+def delete_voiceprints_by_name(name: str) -> int:
+    """删除某人的全部模板，返回删除行数。"""
+    with closing(get_conn()) as conn:
+        cur = conn.execute("DELETE FROM voiceprints WHERE name=?", (name.strip(),))
+        conn.commit()
+        return cur.rowcount

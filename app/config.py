@@ -48,6 +48,20 @@ FUNASR_SPK_NUM = os.getenv("FUNASR_SPK_NUM", "").strip()
 
 def funasr_spk_num() -> "int | None":
     return int(FUNASR_SPK_NUM) if FUNASR_SPK_NUM.isdigit() else None
+
+
+# ---- 声纹（说话人自动识别）----
+# 注册过的人，新会议分轨后自动按声纹匹配命名，免去每次手动改名。仅 funasr 支持。
+VOICEPRINT_ENABLED = os.getenv("VOICEPRINT_ENABLED", "1").strip() not in ("0", "false", "False", "")
+# 判为"同一个人"的余弦相似度阈值（实测同人均值~0.52、异人均值~0.30，0.50 偏保守）
+VOICEPRINT_THRESHOLD = float(os.getenv("VOICEPRINT_THRESHOLD", "0.50"))
+# Top1 须比 Top2 高出此差值才认，避免两人都像时认错（留"不确定"）
+VOICEPRINT_MARGIN = float(os.getenv("VOICEPRINT_MARGIN", "0.06"))
+# 每个说话人最多取多少条（最长的）语音聚合成声纹中心
+VOICEPRINT_MAX_SEG = int(os.getenv("VOICEPRINT_MAX_SEG", "20"))
+# 一人多模板：注册时若新声纹与该人已有某模板相似度 >= 此值，视为同设备 → 合并增强；
+# 否则视为新设备/新来源 → 新增一份模板（实测同设备重录~0.9，换设备/电话~0.7，0.82 是好分界）
+VOICEPRINT_MERGE_THRESHOLD = float(os.getenv("VOICEPRINT_MERGE_THRESHOLD", "0.82"))
 # 通义千问 OpenAI 兼容端点
 DASHSCOPE_LLM_BASE_URL = os.getenv(
     "DASHSCOPE_LLM_BASE_URL",

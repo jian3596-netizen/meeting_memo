@@ -6,6 +6,7 @@ let currentId = null;
 let pollTimer = null;
 let templatesCache = null;
 let hotwords = [];
+let voiceprints = [];
 
 const STATUS_LABEL = {
   uploaded: "已上传，排队中",
@@ -180,6 +181,52 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !el("#hotword-modal").hidden) closeHotwordModal();
 });
 
+// ---------- 声纹库 ----------
+async function loadVoiceprints() {
+  try {
+    const d = await api("/api/voiceprints");
+    voiceprints = d.voiceprints || [];
+  } catch (e) { voiceprints = []; }
+  renderVoiceprints();
+}
+function renderVoiceprints() {
+  const box = el("#voiceprint-list");
+  if (!voiceprints.length) {
+    box.innerHTML = `<span class="tags-empty">还没有声纹。在会议详情里给说话人填名字后点「存声纹」，以后会自动识别</span>`;
+    return;
+  }
+  box.innerHTML = voiceprints.map((v) => {
+    const badge = v.count > 1 ? ` <span class="vp-count">×${v.count}</span>` : "";
+    return `<span class="tag" title="${v.count} 份模板 / 共 ${v.sample_count || 0} 段语音聚合">${esc(v.name)}${badge}<span class="x" data-name="${esc(v.name)}">×</span></span>`;
+  }).join("");
+  box.querySelectorAll(".x").forEach((x) => x.addEventListener("click", () => deleteVoiceprint(x.dataset.name)));
+}
+async function deleteVoiceprint(name) {
+  if (!confirm(`删除「${name}」的全部声纹模板？`)) return;
+  try {
+    const d = await api(`/api/voiceprints?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+    voiceprints = d.voiceprints || [];
+    renderVoiceprints();
+  } catch (e) { alert("删除失败：" + e.message); }
+}
+async function enrollVoiceprint(spk, btn) {
+  const input = el(`#speaker-edit input[data-spk="${spk}"]`);
+  const name = (input && input.value || "").trim();
+  if (!name) { alert("请先在该说话人后面填写姓名，再点「存声纹」"); if (input) input.focus(); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
+  try {
+    const d = await api(`/api/meetings/${currentId}/voiceprints`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ speaker: spk, name }),
+    });
+    await loadVoiceprints();
+    if (btn) btn.textContent = d.action === "merged" ? "已增强✓" : "已新增✓";
+  } catch (e) {
+    alert("保存声纹失败：" + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = "存声纹"; }
+  }
+}
+
 // ---------- 文件选择 ----------
 el("#file").addEventListener("change", () => {
   const f = el("#file").files[0];
@@ -337,14 +384,17 @@ function renderSpeakerEdit(segs, speakerMap) {
   const speakers = [...new Set(segs.map((s) => s.speaker))];
   if (!speakers.length) { el("#speaker-edit").innerHTML = ""; return; }
   el("#speaker-edit").innerHTML = `
-    <div class="se-title">说话人改名</div>
+    <div class="se-title">说话人改名 / 声纹</div>
     ${speakers.map((sp) => `
       <div class="row">
         <label>${esc(sp)}</label>
         <input type="text" class="field" data-spk="${esc(sp)}" value="${esc(speakerMap[sp] || "")}" placeholder="真实姓名 / 角色">
+        <button class="btn btn-ghost btn-sm vp-enroll" data-spk="${esc(sp)}" title="保存该说话人的声纹，以后新会议自动识别">存声纹</button>
       </div>`).join("")}
     <button id="save-speakers" class="btn btn-secondary btn-sm" style="margin-top:6px">保存改名</button>`;
   el("#save-speakers").addEventListener("click", saveSpeakers);
+  el("#speaker-edit").querySelectorAll(".vp-enroll").forEach((b) =>
+    b.addEventListener("click", () => enrollVoiceprint(b.dataset.spk, b)));
 }
 
 async function saveSpeakers() {
@@ -442,4 +492,5 @@ el("#btn-delete").addEventListener("click", async () => {
 
 // ---------- init ----------
 loadHotwords();
+loadVoiceprints();
 loadList();

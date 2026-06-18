@@ -10,11 +10,69 @@ import traceback
 from pathlib import Path
 from typing import List, Optional
 
-from . import audio, db, export
-from .asr import get_asr
+from collections import defaultdict
+
+from . import audio, config, db, export
+from .asr import cosine, get_asr
 from .llm import get_llm
 from .models import MeetingSummary, Segment
 from .textproc import apply_speaker_map, clean_segments, format_ts
+
+
+def _auto_match_speakers(mid: str, wav: Path, segments: List[Segment]) -> None:
+    """分轨后按声纹自动给说话人命名（best-effort）。
+
+    - 仅 funasr（asr 具备 embed_spans）且已注册过声纹时生效。
+    - 每个 SPEAKER_xx 聚合声纹中心 → 与已注册者算余弦 → 超阈值且 Top1-Top2 差够大才认。
+    - 不覆盖已有的手动改名；同一个名字不会同时分给两个说话人（高分优先）。
+    """
+    if not config.VOICEPRINT_ENABLED:
+        return
+    asr = get_asr()
+    if not hasattr(asr, "embed_spans"):
+        return
+    enrolled = db.get_voiceprints()
+    if not enrolled:
+        return
+    # 按人聚合所有模板（一人多份，匹配取最高分）
+    templates = defaultdict(list)
+    for e in enrolled:
+        templates[e["name"]].append(e["emb"])
+
+    spans = defaultdict(list)
+    for s in segments:
+        spans[s.speaker].append((s.start_seconds, s.end_seconds))
+
+    candidates = []  # (score, speaker, name)
+    for spk, sp in spans.items():
+        centroid = asr.embed_spans(wav, sp)
+        if centroid is None:
+            continue
+        # 每个人取其所有模板中的最高余弦
+        sims = sorted(
+            ((max(cosine(centroid, t) for t in tlist), name) for name, tlist in templates.items()),
+            reverse=True,
+        )
+        best_score, best_name = sims[0]
+        second = sims[1][0] if len(sims) > 1 else 0.0
+        if best_score >= config.VOICEPRINT_THRESHOLD and (best_score - second) >= config.VOICEPRINT_MARGIN:
+            candidates.append((best_score, spk, best_name))
+
+    if not candidates:
+        return
+    existing = db.get_speaker_map(mid)
+    candidates.sort(reverse=True)
+    assigned, used_names = {}, set()
+    for score, spk, name in candidates:
+        if spk in existing or spk in assigned or name in used_names:
+            continue
+        assigned[spk] = name
+        used_names.add(name)
+    if assigned:
+        merged = dict(existing)
+        merged.update(assigned)
+        db.set_speaker_map(mid, merged)
+        print(f"[voiceprint] 自动命名: {assigned}", flush=True)
 
 
 def load_segments(mid: str) -> List[Segment]:
@@ -76,6 +134,12 @@ def process_meeting(mid: str) -> None:
         db.set_status(mid, "cleaning_text", 65)
         clean_segments(segments)
         db.save_segments(mid, segments)
+
+        # 3.5 声纹自动命名（best-effort，失败不影响主流程）
+        try:
+            _auto_match_speakers(mid, processed, segments)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
 
         # 4. 结构化纪要
         step = "summarizing"

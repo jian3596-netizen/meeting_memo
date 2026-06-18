@@ -86,3 +86,8 @@ class RegenerateRequest(BaseModel):
 
 class HotwordsRequest(BaseModel):
     hotwords: List[str] = Field(default_factory=list)
+
+
+class VoiceprintEnrollRequest(BaseModel):
+    speaker: str               # 原始说话人标签，如 SPEAKER_00
+    name: str                  # 真实姓名 / 角色

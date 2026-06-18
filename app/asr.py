@@ -12,13 +12,30 @@ from __future__ import annotations
 import json
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 
+import numpy as np
 import requests
 
 from . import audio, config
 from .models import Segment
 from .textproc import format_ts
+
+
+# ---- 声纹相似度工具（余弦 / 加权合并），cam++ 内部也是先 L2 归一化再点积 ----
+def cosine(a, b) -> float:
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    return float(np.dot(a, b) / ((np.linalg.norm(a) * np.linalg.norm(b)) + 1e-8))
+
+
+def merge_centroids(a, na: int, b, nb: int) -> List[float]:
+    """按样本数加权合并两个声纹中心，再归一化（重复注册时增强声纹）。"""
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    m = a * float(na) + b * float(nb)
+    m = m / (np.linalg.norm(m) + 1e-8)
+    return [float(x) for x in m]
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -194,6 +211,48 @@ class FunASRLocal:
             ))
             idx += 1
         return segments
+
+    def embed_spans(self, wav: Path, spans, max_segments: Optional[int] = None,
+                    min_dur: float = 1.0) -> Optional[List[float]]:
+        """对若干 (start_s, end_s) 语音段抽 cam++ 声纹，聚合成一个 L2 归一化中心向量（192维）。
+
+        复用已加载的 self.model.spk_model（CAMPPlus），不另加载模型。
+        取最长的若干段以提高稳健性；全部太短则返回 None。
+        """
+        import wave
+
+        if max_segments is None:
+            max_segments = config.VOICEPRINT_MAX_SEG
+        spans = [(float(s), float(e)) for s, e in spans if (e - s) >= min_dur]
+        spans.sort(key=lambda se: se[1] - se[0], reverse=True)
+        spans = spans[:max_segments]
+        if not spans:
+            return None
+
+        spk_model = self.model.spk_model
+        device = self.model.kwargs.get("device", "cpu")
+        vecs: List[np.ndarray] = []
+        with wave.open(str(wav), "rb") as w:
+            sr = w.getframerate()
+            ch = w.getnchannels()
+            if w.getsampwidth() != 2:          # 仅支持 16-bit PCM（audio.prepare 产物）
+                return None
+            for st, en in spans:
+                w.setpos(max(0, int(st * sr)))
+                raw = w.readframes(int((en - st) * sr))
+                x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                if ch > 1:
+                    x = x.reshape(-1, ch).mean(axis=1)
+                if len(x) < int(0.5 * sr):
+                    continue
+                out, _ = spk_model.inference(data_in=[x], key=["x"], device=device, fs=16000)
+                v = out[0]["spk_embedding"].detach().cpu().numpy().reshape(-1)
+                vecs.append(v / (np.linalg.norm(v) + 1e-8))
+        if not vecs:
+            return None
+        c = np.mean(vecs, axis=0)
+        c = c / (np.linalg.norm(c) + 1e-8)
+        return [float(x) for x in c]
 
 
 def get_asr():

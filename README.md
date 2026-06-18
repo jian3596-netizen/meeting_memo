@@ -123,6 +123,20 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 | POST | `/api/meetings/{id}/speakers` | 说话人改名 |
 | GET | `/api/meetings/{id}/audio` | 音频流（时间戳回听） |
 | GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
+| GET | `/api/hotwords` ｜ PUT | 热词词库 读取 / 保存 |
+| GET | `/api/voiceprints` | 声纹库列表 |
+| DELETE | `/api/voiceprints/{vid}` | 删除某声纹 |
+| POST | `/api/meetings/{id}/voiceprints` | 从该会议某说话人注册声纹（body：speaker + name） |
+
+## 声纹 · 说话人自动识别
+
+给每个人存一份声纹（cam++ 192 维 embedding），以后新会议分轨后**自动匹配命名**，免去每次手动改名。
+
+- **注册**：在某会议详情里给说话人填好真实姓名 → 点该行「存声纹」。系统聚合该说话人在本场的多段语音成一个声纹中心存库；同名再注册会按样本数加权增强。
+- **自动识别**：新会议转写后，每个 `SPEAKER_xx` 算声纹中心与声纹库逐一比对，余弦相似度超阈值且 Top1 明显高于 Top2 才认；**认不出就保留 `SPEAKER_xx` 等你手动命名**，且**不会覆盖你已手动改的名字**。
+- **实测**（真实 3 人录音）：同人余弦均值 ≈ 0.52、异人 ≈ 0.30，注册→识别准确率 ≈ 95%。单句会有重叠，所以采用「多段聚合 + 保守阈值 + 不确定不认」策略。
+- **仅 `ASR_PROVIDER=funasr` 支持**（复用本地 cam++ 模型，不额外加载）。
+- 可调参数（`.env`）：`VOICEPRINT_THRESHOLD`（默认 0.50）、`VOICEPRINT_MARGIN`（默认 0.06）、`VOICEPRINT_MAX_SEG`（默认 20）、`VOICEPRINT_ENABLED`（默认开）。
 
 ## 已知限制
 
@@ -137,4 +151,6 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 - `tests/smoke_fake.py`：fake provider 端到端跑通（无需 key/网络/模型）
 - `tests/check_funasr_real.py`：真实录音前 N 秒本地 FunASR 验证（`TEST_MAX_SEC` 控制秒数）
 - `tests/check_diar.py`：对比自动估计 vs 预设说话人数
+- `tests/check_voiceprint.py`：声纹可行性实验（同人/异人相似度分布 + 识别准确率，`VP_CLIP_SEC` 控制时长）
+- `tests/check_voiceprint_e2e.py`：声纹端到端（embed_spans + db 注册/合并 + 匹配）
 - `tests/show_result.py <meeting_id>`：打印某会议已生成的纪要
