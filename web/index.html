@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 会议纪要系统</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app" class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">🎙️</div>
+      <div>
+        <div class="brand-title">AI 会议纪要</div>
+        <div class="brand-sub">上传音频，自动成纪要</div>
+      </div>
+    </div>
+
+    <!-- 上传 -->
+    <section class="card">
+      <div class="card-title">新建会议</div>
+      <form id="upload-form">
+        <label class="file-drop" id="file-label">
+          <input type="file" id="file" accept="audio/*,video/*" hidden required>
+          <span class="file-icon">⬆️</span>
+          <span class="file-hint" id="file-name">点击选择音频 / 视频文件</span>
+        </label>
+        <select id="template" class="field"></select>
+        <button type="submit" id="upload-btn" class="btn btn-primary btn-block">上传并处理</button>
+        <div id="upload-msg" class="hint"></div>
+      </form>
+    </section>
+
+    <!-- 热词词库 -->
+    <section class="card">
+      <div class="card-title">
+        热词词库 <span class="card-title-sub">提升专有名词识别</span>
+      </div>
+      <div class="hotword-summary">
+        <span id="hotword-count" class="hotword-count">0 个热词</span>
+        <button id="hotword-manage" class="btn btn-secondary btn-sm">管理</button>
+      </div>
+      <div id="hotword-preview" class="tags"></div>
+    </section>
+
+    <!-- 会议列表 -->
+    <section class="card">
+      <div class="card-title">会议列表</div>
+      <ul id="meeting-list" class="meeting-list"></ul>
+    </section>
+  </aside>
+
+  <main class="main-panel" id="detail">
+    <div id="empty" class="empty-state">
+      <div class="empty-icon">📋</div>
+      <div class="empty-title">还没有选择会议</div>
+      <div class="empty-sub">从左侧上传音频，或选择一个已有会议查看纪要</div>
+    </div>
+
+    <div id="meeting-view" hidden>
+      <!-- 顶部 -->
+      <section class="card">
+        <div class="detail-header">
+          <h2 id="m-title" class="detail-title"></h2>
+          <span id="m-status" class="badge"></span>
+        </div>
+        <div class="actions">
+          <select id="m-template" class="field field-sm" title="会议模板"></select>
+          <input type="text" id="m-instruction" class="field field-sm" placeholder="自定义指令（可选）">
+          <button id="btn-regen" class="btn btn-secondary btn-sm">重新生成</button>
+          <a id="btn-export-md" class="btn btn-ghost btn-sm" target="_blank">导出 MD</a>
+          <a id="btn-export-docx" class="btn btn-ghost btn-sm" target="_blank">导出 Word</a>
+          <button id="btn-delete" class="btn btn-danger-ghost btn-sm">删除</button>
+        </div>
+      </section>
+
+      <!-- 处理中 -->
+      <section id="processing" class="card" hidden>
+        <div class="progress"><div id="progressbar"></div></div>
+        <div id="status-text" class="hint"></div>
+      </section>
+
+      <div id="error-area"></div>
+
+      <!-- 音频 -->
+      <section id="audio-card" class="card audio-card" hidden>
+        <audio id="audio" controls preload="none"></audio>
+      </section>
+
+      <!-- 结果 -->
+      <div id="result" hidden>
+        <div class="columns">
+          <section class="card">
+            <div class="card-title">转写全文</div>
+            <div id="transcript-body" class="transcript-body"></div>
+            <div id="speaker-edit"></div>
+          </section>
+          <section class="card">
+            <div class="card-title">AI 纪要</div>
+            <div id="summary-body"></div>
+          </section>
+        </div>
+        <section class="card">
+          <div class="card-title">待办事项</div>
+          <div id="todos-body"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 热词管理弹窗 -->
+<div id="hotword-modal" class="modal-mask" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">热词词库管理</div>
+      <button id="hw-close" class="modal-close" title="关闭">×</button>
+    </div>
+    <div class="modal-sub">
+      添加专有名词 / 人名 / 项目词，提升识别准确率，对<b>新上传</b>的会议生效。
+      建议按会议主题精选，几十到一两百个效果最佳；过多可能稀释偏置效果。
+    </div>
+    <div class="modal-toolbar">
+      <input type="text" id="hw-search" class="field" placeholder="搜索已有热词…">
+      <span id="hw-count" class="hw-count">0 个</span>
+    </div>
+    <div class="modal-add">
+      <input type="text" id="hw-add-input" class="field" placeholder="输入热词，回车添加">
+      <button id="hw-add-btn" class="btn btn-secondary btn-sm">添加</button>
+      <button id="hw-bulk-toggle" class="btn btn-secondary btn-sm">批量编辑</button>
+    </div>
+    <div id="hw-chips" class="hw-chips"></div>
+    <div id="hw-bulk" class="hw-bulk" hidden>
+      <div class="hint">每行一个热词，适合粘贴大批量列表（可上百个），点"应用文本"。</div>
+      <textarea id="hw-bulk-text" rows="10" placeholder="热词1&#10;热词2&#10;热词3"></textarea>
+      <button id="hw-bulk-apply" class="btn btn-secondary btn-sm">应用文本</button>
+    </div>
+    <div class="modal-footer">
+      <button id="hw-clear" class="btn btn-danger-ghost btn-sm">清空</button>
+      <div style="flex:1"></div>
+      <button id="hw-cancel" class="btn btn-secondary btn-sm">取消</button>
+      <button id="hw-save" class="btn btn-primary btn-sm">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

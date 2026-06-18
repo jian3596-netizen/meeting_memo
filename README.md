@@ -1,0 +1,140 @@
+# AI 会议纪要系统（上传音频文件版 · MVP）
+
+上传会议音频 → **本地**转写 + 说话人分轨 → AI 结构化纪要 + 待办提取 → 在线查看/改名/导出，
+每条结论可点击时间戳回听原音频。单机运行，音频不出本机。
+
+## 技术栈
+
+- **后端**：FastAPI + SQLite（stdlib sqlite3）+ 后台线程异步处理
+- **音频**：imageio-ffmpeg 自带 ffmpeg（无需系统安装），统一转 16kHz 单声道 wav（视频自动抽音轨）
+- **ASR + 说话人分轨**：**本地 FunASR**（Paraformer + fsmn-vad + ct-punc + cam++），离线、音频不出本机
+- **LLM 纪要**：云 **通义千问 qwen-plus**（DashScope OpenAI 兼容端点），JSON 强约束 + source_time 防幻觉
+- **前端**：单页原生 HTML/JS（无构建步骤）
+- **导出**：Markdown / Word（docx）
+
+> 说明：音频完全在本机转写；但**转写后的文本**会发往通义千问做总结。要全本地可后续换本地 LLM（Ollama 等）。
+
+## 快速开始
+
+1. 根目录 `.env`（已含示例）：
+   ```env
+   DASHSCOPE_API_KEY=sk-xxxx     # 仅 LLM 总结需要
+   ASR_PROVIDER=funasr           # funasr(本地) | dashscope(云) | fake(假数据)
+   LLM_PROVIDER=dashscope        # dashscope | fake
+   LLM_MODEL=qwen-plus
+   FUNASR_SPK_NUM=3              # 预设说话人数：留空=自动估计(长音频可能塌缩成1人)，填数字更稳
+   ```
+2. 安装依赖并启动：
+   ```bash
+   uv sync
+   uv add torch                 # funasr 不会自动装 torch，需单独装（Windows 默认 CPU 轮子）
+   uv run python main.py
+   ```
+3. 浏览器打开 http://127.0.0.1:8000 ，上传音频。
+
+> 首次用 funasr 会从 ModelScope 自动下载模型（~1.3GB）。
+> 想先不下模型直接看界面/流程：把 `.env` 两个 PROVIDER 改成 `fake`。
+
+## Docker 部署
+
+镜像内置 **CPU 版 PyTorch**（不含 CUDA），ffmpeg 用 imageio 自带二进制，宿主机无需装任何东西。
+模型（~2.4GB）与会议数据通过**挂载卷**持久化，不打进镜像。
+
+> 仅在 x86_64 Linux 验证；Apple Silicon / ARM 需自行确认 wheel 可用。
+
+### 1. 准备 .env
+
+```bash
+cp .env.example .env        # 然后填入 DASHSCOPE_API_KEY（仅 LLM 总结用）
+```
+
+### 2. docker compose（推荐）
+
+```bash
+docker compose up -d --build      # 构建并后台启动
+docker compose logs -f            # 看日志（首次会下载模型 ~2.4GB）
+```
+打开 http://localhost:8000 。改完代码重建：`docker compose up -d --build`；停止：`docker compose down`。
+
+### 3. 或手动 build / run
+
+```bash
+docker build -t meeting-memo:latest .          # 打包
+
+docker run -d --name meeting-memo \            # 运行
+  -p 8000:8000 \
+  --env-file .env \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/models:/app/models" \
+  --restart unless-stopped \
+  meeting-memo:latest
+```
+
+### 挂载卷
+
+| 宿主机 | 容器内 | 内容 |
+| --- | --- | --- |
+| `./data` | `/app/data` | SQLite、上传原文件、转码 wav、ASR 留档 |
+| `./models` | `/app/models` | FunASR/ModelScope 模型缓存（`MODELSCOPE_CACHE`），重建容器不丢、不重下 |
+
+### 预热模型（可选）
+
+首次转写会联网下载 ~2.4GB 模型到 `./models`，第一场会议会比较慢；之后复用缓存、可离线转写。
+想提前下好：
+
+```bash
+docker compose run --rm meeting-memo \
+  python -c "from app.asr import FunASRLocal; FunASRLocal(); print('模型就绪')"
+```
+
+### 迁移到内网 / 离线机
+
+在有网机器导出镜像，连同预热好的 `./models` 一起拷到目标机：
+
+```bash
+docker save meeting-memo:latest | gzip > meeting-memo.tar.gz   # 有网机：导出
+docker load < meeting-memo.tar.gz                              # 目标机：导入
+# 再把 ./models 目录拷过去挂载即用（总结仍需能访问通义千问，否则改本地 LLM）
+```
+
+### 常见问题
+
+- **首场会议一直“转写中”**：多半在下模型，`docker compose logs -f` 看进度，下完即恢复。
+- **总结失败**：检查 `.env` 的 `DASHSCOPE_API_KEY`（总结走云端 qwen，需联网）。要全离线改 `LLM_PROVIDER=fake` 或换本地 LLM。
+- **构建报 torch 版本找不到**：把 Dockerfile 里 `torch==2.12.0 torchaudio==2.11.0` 的精确版本去掉，让 CPU 源自动选。
+- **想用 GPU**：当前是 CPU 镜像；需换 CUDA 基础镜像 + GPU 版 torch，并以 `--gpus all` 运行。
+
+## 性能基线（参考：i5-1335U，无 GPU）
+
+- FunASR RTF ≈ 0.33x（40 分钟音频 ≈ 13 分钟 CPU 推理）
+- 模型每进程首次加载 ≈ 140s，之后进程内复用
+
+## API（PRD 第 7 节）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/meetings` | 上传音频（multipart：file + template_type） |
+| GET | `/api/meetings` | 会议列表 |
+| GET | `/api/meetings/{id}/status` | 处理状态 + 进度 |
+| GET | `/api/meetings/{id}/transcript` | 转写全文（带说话人/时间戳） |
+| GET | `/api/meetings/{id}/summary` | 结构化纪要 JSON |
+| PUT | `/api/meetings/{id}/summary` | 保存编辑后的纪要 |
+| POST | `/api/meetings/{id}/regenerate` | 换模板/加指令重新生成（仅重跑总结） |
+| POST | `/api/meetings/{id}/speakers` | 说话人改名 |
+| GET | `/api/meetings/{id}/audio` | 音频流（时间戳回听） |
+| GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
+
+## 已知限制
+
+- 说话人分轨：短音频自动估计良好；**长音频自动估计可能塌缩成 1 人**，建议用 `FUNASR_SPK_NUM` 指定人数。
+- 无 GPU 时长音频较慢（见性能基线）；分轨依赖单声道。
+- pdf 导出暂未实现（先 md/docx）。
+- Windows 上已通过 `KMP_DUPLICATE_LIB_OK=TRUE`（在 `app/config.py` 自动设置）规避 OpenMP 冲突。
+- 会议模板：通用 / 项目 / 客户拜访 / 技术评审（PRD 第 5 节）。
+
+## 自测脚本
+
+- `tests/smoke_fake.py`：fake provider 端到端跑通（无需 key/网络/模型）
+- `tests/check_funasr_real.py`：真实录音前 N 秒本地 FunASR 验证（`TEST_MAX_SEC` 控制秒数）
+- `tests/check_diar.py`：对比自动估计 vs 预设说话人数
+- `tests/show_result.py <meeting_id>`：打印某会议已生成的纪要

@@ -1,0 +1,13 @@
+services:
+  meeting-memo:
+    build: .
+    image: meeting-memo:latest
+    container_name: meeting-memo
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env                  # 注入 DASHSCOPE_API_KEY 等（不进镜像）
+    volumes:
+      - ./data:/app/data      # SQLite / 上传原文件 / 转码 wav / ASR 留档
+      - ./models:/app/models  # FunASR·ModelScope 模型缓存（~2.4GB，避免重下）
+    restart: unless-stopped
