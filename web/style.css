@@ -187,11 +187,17 @@ audio { width: 100%; display: block; }
 .audio-card { padding: 12px 16px; }
 
 /* ===== 双栏 ===== */
-.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
 @media (max-width: 1180px) { .columns { grid-template-columns: 1fr; } }
+/* 两栏卡片等高（grid stretch）并钳定最大高度，内部纵向 flex，
+   内容超出就在卡片内滚动 → 两栏底部平齐、谁都不会被撑高 */
+.columns > .card {
+  display: flex; flex-direction: column; min-width: 0;
+  max-height: calc(100vh - 240px); overflow: hidden;
+}
 
 /* 转写 */
-.transcript-body { max-height: 460px; overflow-y: auto; }
+.transcript-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .seg { padding: 9px 8px; border-radius: var(--r-base); font-size: 14px; line-height: 1.65; transition: background var(--t-fast); }
 .seg:hover { background: var(--color-bg-secondary); }
 .seg .ts {
@@ -201,13 +207,14 @@ audio { width: 100%; display: block; }
 .seg .ts:hover { background: #d6e9ff; }
 .seg .spk { font-weight: 600; color: var(--color-primary-dark); margin-right: 6px; }
 
-#speaker-edit { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--color-border); }
+#speaker-edit { flex: 0 0 auto; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--color-border); }
 #speaker-edit .se-title { font-size: 13px; font-weight: 600; color: var(--color-text-secondary); margin-bottom: 10px; }
 #speaker-edit .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 #speaker-edit .row label { width: 110px; font-size: 13px; color: var(--color-text-secondary); }
 #speaker-edit .row .field { flex: 1; }
 
 /* 纪要 */
+#summary-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .sum-summary { font-size: 14px; line-height: 1.75; background: var(--color-primary-lighter); border-left: 3px solid var(--color-primary); padding: 12px 14px; border-radius: var(--r-md); margin-bottom: 16px; }
 .sum-block { margin-bottom: 16px; }
 .sum-block h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); display: flex; align-items: center; gap: 6px; }
