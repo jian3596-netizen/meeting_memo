@@ -80,12 +80,21 @@ class StatusResponse(BaseModel):
 
 
 class RegenerateRequest(BaseModel):
-    template_type: Optional[str] = None
+    category: Optional[str] = None          # 分类名（None=保持原分类）
     custom_instruction: Optional[str] = None
 
 
 class HotwordsRequest(BaseModel):
     hotwords: List[str] = Field(default_factory=list)
+
+
+class CategoryItem(BaseModel):
+    name: str
+    prompt: str = ""
+
+
+class CategoriesRequest(BaseModel):
+    categories: List[CategoryItem] = Field(default_factory=list)
 
 
 class VoiceprintEnrollRequest(BaseModel):

@@ -130,7 +130,7 @@ class DashScopeASR:
             idx += len(chunk_segs)
         return segments
 
-    def transcribe(self, wav: Path, duration_sec: float, hotword: str = "") -> List[Segment]:
+    def transcribe(self, wav: Path, duration_sec: float, hotword: str = "", spk_num: "int | None" = None) -> List[Segment]:
         chunks = audio.split_wav(wav, config.DIARIZATION_MAX_SECONDS)
         segments: List[Segment] = []
         for part, offset in chunks:
@@ -141,7 +141,7 @@ class DashScopeASR:
 class FakeASR:
     """无网络/无 key 时的假数据，模拟一场 3 人技术评审。"""
 
-    def transcribe(self, wav: Path, duration_sec: float, hotword: str = "") -> List[Segment]:
+    def transcribe(self, wav: Path, duration_sec: float, hotword: str = "", spk_num: "int | None" = None) -> List[Segment]:
         script = [
             (3, 9, 0, "我们今天主要讨论一下前后端接口的设计问题，时间有限我们快速过一下。"),
             (10, 18, 1, "我建议先把通讯格式固定下来，这样前端和后端可以并行开发，互不阻塞。"),
@@ -183,11 +183,11 @@ class FunASRLocal:
             )
         self.model = FunASRLocal._model
 
-    def transcribe(self, wav: Path, duration_sec: float, hotword: str = "") -> List[Segment]:
+    def transcribe(self, wav: Path, duration_sec: float, hotword: str = "", spk_num: "int | None" = None) -> List[Segment]:
         kw = {"batch_size_s": 300}
-        spk_num = config.funasr_spk_num()
-        if spk_num:
-            kw["preset_spk_num"] = spk_num  # 强制聚类成指定人数，长音频更稳
+        n = spk_num if spk_num else config.funasr_spk_num()  # 每会议指定优先，否则用全局默认
+        if n:
+            kw["preset_spk_num"] = n  # 强制聚类成指定人数，长音频更稳
         if hotword:
             kw["hotword"] = hotword  # 热词偏置（空格分隔；需支持热词的模型，见 config）
         res = self.model.generate(input=str(wav), **kw)

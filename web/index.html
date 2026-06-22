@@ -20,6 +20,7 @@
     <div class="topbar-actions">
       <button id="btn-upload-open" class="btn btn-primary btn-sm">＋ 上传录音</button>
       <button id="btn-queue-open" class="btn btn-secondary btn-sm queue-btn">队列<span id="queue-badge" class="queue-badge" hidden>0</span></button>
+      <button id="btn-category-open" class="btn btn-secondary btn-sm">分类库</button>
       <button id="btn-hotword-open" class="btn btn-secondary btn-sm">热词</button>
       <button id="btn-voiceprint-open" class="btn btn-secondary btn-sm">声纹库</button>
     </div>
@@ -48,7 +49,7 @@
           <span id="m-status" class="badge"></span>
         </div>
         <div class="actions">
-          <select id="m-template" class="field field-sm" title="会议模板"></select>
+          <select id="m-category-sel" class="field field-sm" title="分类（决定总结 Prompt）"></select>
           <input type="text" id="m-instruction" class="field field-sm" placeholder="自定义指令（可选）">
           <button id="btn-regen" class="btn btn-secondary btn-sm">重新生成</button>
           <a id="btn-export-md" class="btn btn-ghost btn-sm" target="_blank">导出 MD</a>
@@ -110,10 +111,39 @@
         <span class="file-icon">⬆️</span>
         <span class="file-hint" id="file-name">点击选择音频 / 视频文件（可多选）</span>
       </label>
-      <select id="template" class="field" style="margin-top:12px"></select>
+      <div id="upload-list" class="upload-list" hidden></div>
+      <label class="edit-label" style="margin-top:12px;display:block">分类（决定总结 Prompt）</label>
+      <select id="upload-category" class="field" style="margin-top:4px"></select>
       <button type="submit" id="upload-btn" class="btn btn-primary btn-block" style="margin-top:12px">上传并处理</button>
-      <div id="upload-msg" class="hint"></div>
+      <div id="upload-msg" class="hint">说话人数留空＝自动估计；知道几个人就填上，长录音更不易把多人并成一个。</div>
     </form>
+  </div>
+</div>
+
+<!-- ============ 分类库弹窗 ============ -->
+<div id="category-modal" class="modal-mask" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">分类库 <span class="card-title-sub">每个分类带一段总结 Prompt</span></div>
+      <button id="cat-close" class="modal-close" title="关闭">×</button>
+    </div>
+    <div class="modal-sub">
+      分类决定生成纪要时的关注重点（Prompt）。左边选分类，右边编辑它的 Prompt；
+      给某条录音换分类时会问你是否按新分类重新生成纪要。
+    </div>
+    <div class="cat-layout">
+      <div class="cat-left">
+        <div id="cat-left-list" class="cat-left-list"></div>
+        <button id="cat-add" class="btn btn-secondary btn-sm cat-add-btn">＋ 新增分类</button>
+      </div>
+      <div id="cat-right" class="cat-right"></div>
+    </div>
+    <div class="modal-footer">
+      <button id="cat-del" class="btn btn-danger-ghost btn-sm">删除当前分类</button>
+      <div style="flex:1"></div>
+      <button id="cat-cancel" class="btn btn-secondary btn-sm">取消</button>
+      <button id="cat-save" class="btn btn-primary btn-sm">保存</button>
+    </div>
   </div>
 </div>
 

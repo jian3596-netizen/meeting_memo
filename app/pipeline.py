@@ -210,7 +210,9 @@ def process_meeting(mid: str) -> None:
         step = "transcribing"
         db.set_status(mid, "transcribing", 40)
         hotword = " ".join(db.get_hotwords())
-        segments = get_asr().transcribe(processed, duration, hotword=hotword)
+        segments = get_asr().transcribe(
+            processed, duration, hotword=hotword, spk_num=(meeting.get("spk_num") or None)
+        )
         if not segments:
             raise RuntimeError("ASR 未返回任何文本（音频可能为空或无人声）")
 
@@ -230,7 +232,8 @@ def process_meeting(mid: str) -> None:
         step = "summarizing"
         db.set_status(mid, "summarizing", 80)
         apply_speaker_map(segments, db.get_speaker_map(mid))
-        summary = get_llm().summarize(segments, meeting.get("template_type", "general"))
+        cat_name, cat_focus = _resolve_category(meeting.get("category"))
+        summary = get_llm().summarize(segments, cat_name, cat_focus)
         from . import config
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)
@@ -242,22 +245,31 @@ def process_meeting(mid: str) -> None:
         db.mark_failed(mid, step, f"{type(e).__name__}: {e}")
 
 
-def regenerate(mid: str, template_type: Optional[str], custom_instruction: Optional[str]) -> None:
-    """仅重跑总结步骤，复用已有转写（PRD 7.5）。"""
+def _resolve_category(name: Optional[str]):
+    """会议分类 → (名称, 总结Prompt)；分类没设或没Prompt时回落到默认。"""
+    from . import templates_prompts
+    name = (name or "").strip()
+    focus = db.get_category_prompt(name)
+    if not focus:
+        return (name or templates_prompts.DEFAULT_CATEGORY_NAME, templates_prompts.DEFAULT_CATEGORY_FOCUS)
+    return (name, focus)
+
+
+def regenerate(mid: str, category: Optional[str], custom_instruction: Optional[str]) -> None:
+    """仅重跑总结步骤，复用已有转写（PRD 7.5）。category 为分类名（None=保持原分类）。"""
     meeting = db.get_meeting(mid)
     if not meeting:
         return
-    if template_type:
-        db.update_meeting(mid, template_type=template_type)
-        meeting["template_type"] = template_type
+    if category is not None:
+        db.update_meeting(mid, category=category)
+        meeting["category"] = category
     try:
         db.set_status(mid, "summarizing", 80)
         segments = load_segments(mid)
         if not segments:
             raise RuntimeError("没有可用的转写，无法生成纪要")
-        summary = get_llm().summarize(
-            segments, meeting.get("template_type", "general"), custom_instruction
-        )
+        cat_name, cat_focus = _resolve_category(meeting.get("category"))
+        summary = get_llm().summarize(segments, cat_name, cat_focus, custom_instruction)
         from . import config
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)

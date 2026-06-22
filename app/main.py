@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, db, export, pipeline
 from .models import (
+    CategoriesRequest,
     CreateMeetingResponse,
     HotwordsRequest,
     MeetingMetaRequest,
@@ -26,10 +27,6 @@ from .models import (
     StatusResponse,
     VoiceprintEnrollRequest,
 )
-
-# 预置分类（前端也会并入用户已有的分类）
-PRESET_CATEGORIES = ["项目会议", "例会", "客户拜访", "访谈", "日常记录"]
-from .templates_prompts import TEMPLATES
 
 app = FastAPI(title="AI 会议纪要系统", version="0.1.0")
 
@@ -95,7 +92,8 @@ def index() -> HTMLResponse:
 @app.post("/api/meetings", response_model=CreateMeetingResponse)
 async def create_meeting(
     file: UploadFile = File(...),
-    template_type: str = Form("general"),
+    category: str = Form(""),
+    spk_num: int = Form(0),
 ) -> CreateMeetingResponse:
     ext = Path(file.filename or "").suffix.lower()
     if ext not in config.ALLOWED_UPLOAD_EXTS:
@@ -103,18 +101,21 @@ async def create_meeting(
             status_code=400,
             detail=f"不支持的格式 {ext or '(无后缀)'}；支持：{sorted(config.ALLOWED_UPLOAD_EXTS)}",
         )
-    if template_type not in TEMPLATES:
-        template_type = "general"
 
     title = Path(file.filename or "会议").stem
     mid = db.create_meeting(
         title=title, original_filename=file.filename or "", audio_path="",
-        template_type=template_type,
+        template_type="general",
     )
     dest = config.UPLOAD_DIR / f"{mid}{ext}"
     with open(dest, "wb") as out:
         shutil.copyfileobj(file.file, out)
-    db.update_meeting(mid, audio_path=str(dest))
+    fields = {"audio_path": str(dest)}
+    if category.strip():
+        fields["category"] = category.strip()   # 分类决定总结 Prompt
+    if spk_num and spk_num > 0:
+        fields["spk_num"] = spk_num   # 指定说话人数，避免长音频"少分"
+    db.update_meeting(mid, **fields)
 
     pipeline.enqueue_meeting(mid)   # 入队，由单线程串行处理
     return CreateMeetingResponse(meeting_id=mid, status="uploaded")
@@ -130,6 +131,18 @@ def get_hotwords() -> Dict:
 def update_hotwords(req: HotwordsRequest) -> Dict:
     cleaned = db.set_hotwords(req.hotwords)
     return {"ok": True, "hotwords": cleaned, "count": len(cleaned)}
+
+
+# ---------------- 分类库（名称 + 总结 Prompt） ----------------
+@app.get("/api/categories")
+def get_categories() -> Dict:
+    return {"categories": db.get_categories()}
+
+
+@app.put("/api/categories")
+def update_categories(req: CategoriesRequest) -> Dict:
+    cleaned = db.set_categories([c.model_dump() for c in req.categories])
+    return {"ok": True, "categories": cleaned}
 
 
 # ---------------- 声纹（说话人自动识别） ----------------
@@ -211,7 +224,7 @@ def list_meetings() -> Dict:
         }
         for m in db.list_meetings()
     ]
-    return {"meetings": items, "templates": TEMPLATES, "preset_categories": PRESET_CATEGORIES}
+    return {"meetings": items, "categories": db.get_categories()}
 
 
 @app.patch("/api/meetings/{mid}/meta")
@@ -326,7 +339,7 @@ def update_summary(mid: str, summary: MeetingSummary) -> Dict:
 @app.post("/api/meetings/{mid}/regenerate", response_model=CreateMeetingResponse)
 def regenerate(mid: str, req: RegenerateRequest) -> CreateMeetingResponse:
     _require(mid)
-    _spawn(pipeline.regenerate, mid, req.template_type, req.custom_instruction)
+    _spawn(pipeline.regenerate, mid, req.category, req.custom_instruction)
     return CreateMeetingResponse(meeting_id=mid, status="summarizing")
 
 

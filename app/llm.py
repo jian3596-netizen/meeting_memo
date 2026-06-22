@@ -64,12 +64,13 @@ class QwenLLM:
                 raise
 
     def summarize(
-        self, segments: List[Segment], template_type: str, custom_instruction: Optional[str] = None
+        self, segments: List[Segment], cat_name: str, cat_focus: str,
+        custom_instruction: Optional[str] = None,
     ) -> MeetingSummary:
         text = transcript_to_text(segments, use_clean=True)
         if len(text) <= config.LLM_SINGLE_PASS_MAX_CHARS:
             messages = templates_prompts.build_summary_messages(
-                text, template_type, custom_instruction
+                text, cat_name, cat_focus, custom_instruction
             )
             return self._chat_to_summary(messages)
 
@@ -84,18 +85,19 @@ class QwenLLM:
             notes_parts.append(f"[片段{i} {ch['start']}~{ch['end']}]\n{note}")
         notes = "\n\n".join(notes_parts)
         return self._chat_to_summary(
-            templates_prompts.build_reduce_messages(notes, template_type, custom_instruction)
+            templates_prompts.build_reduce_messages(notes, cat_name, cat_focus, custom_instruction)
         )
 
 
 class FakeLLM:
     def summarize(
-        self, segments: List[Segment], template_type: str, custom_instruction: Optional[str] = None
+        self, segments: List[Segment], cat_name: str, cat_focus: str,
+        custom_instruction: Optional[str] = None,
     ) -> MeetingSummary:
         first = segments[0].text if segments else "会议"
         title = (first[:18] + "…") if len(first) > 18 else first
         return MeetingSummary(
-            title=f"[{templates_prompts.template_name(template_type)}] {title}",
+            title=f"[{cat_name or '通用会议'}] {title}",
             summary="（示例纪要）本次会议讨论了前后端接口设计，倾向先固定通讯格式再并行实现，"
                     "并就本地 ASR 部署位置留有未决问题。",
             topics=[{"title": "前后端接口设计", "summary": "倾向先固定 API 再并行实现。", "source_time": "00:00:28"}],

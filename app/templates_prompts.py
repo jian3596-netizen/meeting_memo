@@ -56,6 +56,16 @@ def template_name(template_type: str) -> str:
     return TEMPLATES.get(template_type, TEMPLATES["general"])["name"]
 
 
+# 分类未指定 / 找不到对应 Prompt 时的兜底
+DEFAULT_CATEGORY_NAME = "通用会议"
+DEFAULT_CATEGORY_FOCUS = TEMPLATES["general"]["focus"]
+
+
+def category_seed() -> List[Dict[str, str]]:
+    """内置模板作为分类库的初始种子（名称 + Prompt）。"""
+    return [{"name": v["name"], "prompt": v["focus"]} for v in TEMPLATES.values()]
+
+
 SYSTEM_PROMPT = """你是一名专业的中文会议纪要助手。你的唯一信息来源是用户提供的会议转写文本。
 
 铁律（违反任何一条都视为失败）：
@@ -78,19 +88,18 @@ JSON 结构（严格遵守字段名）：
 """
 
 
-def _instruction_block(template_type: str, custom_instruction: Optional[str]) -> str:
-    tpl = TEMPLATES.get(template_type, TEMPLATES["general"])
-    block = f"本次会议类型：{tpl['name']}。{tpl['focus']}"
+def _instruction_block(name: str, focus: str, custom_instruction: Optional[str]) -> str:
+    block = f"本次会议类型：{name or DEFAULT_CATEGORY_NAME}。{focus or DEFAULT_CATEGORY_FOCUS}"
     if custom_instruction:
         block += f"\n额外要求：{custom_instruction.strip()}"
     return block
 
 
 def build_summary_messages(
-    transcript_text: str, template_type: str, custom_instruction: Optional[str] = None
+    transcript_text: str, name: str, focus: str, custom_instruction: Optional[str] = None
 ) -> List[Dict[str, str]]:
     user = (
-        f"{_instruction_block(template_type, custom_instruction)}\n\n"
+        f"{_instruction_block(name, focus, custom_instruction)}\n\n"
         f"以下是带时间戳和说话人的会议转写，请据此生成结构化纪要 JSON：\n\n"
         f"=== 会议转写开始 ===\n{transcript_text}\n=== 会议转写结束 ==="
     )
@@ -115,10 +124,10 @@ def build_map_messages(chunk_text: str, idx: int, total: int) -> List[Dict[str, 
 
 
 def build_reduce_messages(
-    notes: str, template_type: str, custom_instruction: Optional[str] = None
+    notes: str, name: str, focus: str, custom_instruction: Optional[str] = None
 ) -> List[Dict[str, str]]:
     user = (
-        f"{_instruction_block(template_type, custom_instruction)}\n\n"
+        f"{_instruction_block(name, focus, custom_instruction)}\n\n"
         f"以下是同一场会议各片段的要点笔记（已带时间戳），请合并去重，生成最终结构化纪要 JSON：\n\n"
         f"=== 要点笔记开始 ===\n{notes}\n=== 要点笔记结束 ==="
     )

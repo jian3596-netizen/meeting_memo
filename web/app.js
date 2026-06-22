@@ -4,12 +4,11 @@ const el = (s) => document.querySelector(s);
 
 let currentId = null;
 let pollTimer = null;
-let templatesCache = null;
+let categories = [];   // [{name, prompt}]
 let hotwords = [];
 let voiceprints = [];
 let currentSummary = null;
 let allMeetings = [];
-let presetCategories = ["项目会议", "例会", "客户拜访", "访谈", "日常记录"];
 let activeTagFilter = new Set();
 let queuePollTimer = null;
 
@@ -66,13 +65,15 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// ---------- 模板 ----------
-function fillTemplates(templates) {
-  templatesCache = templates;
-  const opts = Object.entries(templates)
-    .map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
-  el("#template").innerHTML = opts;
-  el("#m-template").innerHTML = opts;
+// ---------- 分类（下拉填充） ----------
+function categoryNames() { return categories.map((c) => c.name); }
+
+function fillCategories() {
+  const names = categoryNames();
+  const opts = `<option value="">未分类</option>`
+    + names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  el("#upload-category").innerHTML = opts;
+  el("#m-category-sel").innerHTML = opts;
 }
 
 // ---------- 视图切换 ----------
@@ -95,8 +96,7 @@ el("#btn-back").addEventListener("click", showLibrary);
 // ---------- 录音库 ----------
 async function loadLibrary() {
   const data = await api("/api/meetings");
-  if (data.templates && !templatesCache) fillTemplates(data.templates);
-  if (data.preset_categories) presetCategories = data.preset_categories;
+  if (data.categories) { categories = data.categories; fillCategories(); }
   allMeetings = data.meetings || [];
   buildFilterOptions();
   renderCards();
@@ -163,8 +163,103 @@ el("#btn-queue-open").addEventListener("click", openQueueModal);
 el("#queue-close").addEventListener("click", () => { el("#queue-modal").hidden = true; });
 el("#queue-modal").addEventListener("click", (e) => { if (e.target.id === "queue-modal") el("#queue-modal").hidden = true; });
 
+// ---------- 分类库管理（左右栏：左选分类，右编辑 Prompt） ----------
+let catDraft = [];
+let catSel = -1;
+
+function openCategoryModal() {
+  catDraft = categories.map((c) => ({ name: c.name, prompt: c.prompt || "" }));
+  catSel = catDraft.length ? 0 : -1;
+  renderCatModal();
+  el("#category-modal").hidden = false;
+}
+function closeCategoryModal() { el("#category-modal").hidden = true; }
+
+function flushCatRight() {
+  if (catSel < 0 || catSel >= catDraft.length) return;
+  const ni = el("#cat-name-input"), pi = el("#cat-prompt-input");
+  if (ni) catDraft[catSel].name = ni.value;
+  if (pi) catDraft[catSel].prompt = pi.value;
+}
+function renderCatModal() { renderCatLeft(); renderCatRight(); }
+
+function renderCatLeft() {
+  const box = el("#cat-left-list");
+  if (!catDraft.length) {
+    box.innerHTML = `<div class="tags-empty" style="padding:8px">还没有分类</div>`;
+    return;
+  }
+  box.innerHTML = catDraft.map((c, i) =>
+    `<div class="cat-item${i === catSel ? " active" : ""}" data-i="${i}">${esc(c.name || "（未命名）")}</div>`).join("");
+  box.querySelectorAll(".cat-item").forEach((it) => it.addEventListener("click", () => {
+    flushCatRight();
+    catSel = +it.dataset.i;
+    renderCatModal();
+  }));
+}
+
+function renderCatRight() {
+  const box = el("#cat-right");
+  if (catSel < 0 || catSel >= catDraft.length) {
+    box.innerHTML = `<div class="tags-empty" style="padding:20px">从左侧选择一个分类，或点「＋ 新增分类」</div>`;
+    return;
+  }
+  const c = catDraft[catSel];
+  box.innerHTML = `
+    <label class="edit-label">分类名称</label>
+    <input id="cat-name-input" class="field" value="${esc(c.name)}" placeholder="分类名称">
+    <label class="edit-label" style="margin-top:12px">总结 Prompt（关注重点）</label>
+    <textarea id="cat-prompt-input" class="edit-ta cat-prompt-big" placeholder="这个分类生成纪要时的关注重点，例如：关注项目进展、阻塞、决策、各事项负责人与截止时间…">${esc(c.prompt)}</textarea>`;
+  el("#cat-name-input").addEventListener("input", () => {
+    catDraft[catSel].name = el("#cat-name-input").value;
+    renderCatLeft();
+  });
+}
+
+async function saveCategories() {
+  flushCatRight();
+  const list = catDraft
+    .map((c) => ({ name: (c.name || "").trim(), prompt: (c.prompt || "").trim() }))
+    .filter((c) => c.name);
+  const btn = el("#cat-save");
+  btn.disabled = true; btn.textContent = "保存中…";
+  try {
+    const d = await api("/api/categories", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ categories: list }),
+    });
+    categories = d.categories || [];
+    fillCategories();
+    buildFilterOptions();
+    renderCards();
+    closeCategoryModal();
+  } catch (e) { alert("保存失败：" + e.message); }
+  finally { btn.disabled = false; btn.textContent = "保存"; }
+}
+
+el("#btn-category-open").addEventListener("click", openCategoryModal);
+el("#cat-close").addEventListener("click", closeCategoryModal);
+el("#cat-cancel").addEventListener("click", closeCategoryModal);
+el("#cat-save").addEventListener("click", saveCategories);
+el("#cat-add").addEventListener("click", () => {
+  flushCatRight();
+  catDraft.push({ name: "新分类", prompt: "" });
+  catSel = catDraft.length - 1;
+  renderCatModal();
+  const ni = el("#cat-name-input"); if (ni) { ni.focus(); ni.select(); }
+});
+el("#cat-del").addEventListener("click", () => {
+  if (catSel < 0) return;
+  if (!confirm(`删除分类「${catDraft[catSel].name || ""}」？`)) return;
+  catDraft.splice(catSel, 1);
+  catSel = catDraft.length ? Math.min(catSel, catDraft.length - 1) : -1;
+  renderCatModal();
+});
+el("#category-modal").addEventListener("click", (e) => { if (e.target.id === "category-modal") closeCategoryModal(); });
+
 function allCategories() {
-  const cats = new Set(presetCategories);
+  // 分类库里的 + 录音里已用到的（兼容已删除的分类仍能筛选）
+  const cats = new Set(categoryNames());
   allMeetings.forEach((m) => { if (m.category) cats.add(m.category); });
   return [...cats];
 }
@@ -302,7 +397,7 @@ async function saveMetaField(m, body) {
   renderCards();
 }
 
-/** 分类单元格：双击 → 下拉选择（含「＋ 新建分类…」）。 */
+/** 分类单元格：双击 → 从分类库下拉选择；改后提示是否按新分类重生成纪要。 */
 function inlineSelectCategory(td, m) {
   if (td.dataset.editing === "1") return;
   td.dataset.editing = "1";
@@ -310,9 +405,8 @@ function inlineSelectCategory(td, m) {
   const cur = m.category || "";
   const sel = document.createElement("select");
   sel.className = "inline-field";
-  sel.innerHTML = `<option value="">（未分类）</option>`
-    + allCategories().map((c) => `<option value="${esc(c)}"${c === cur ? " selected" : ""}>${esc(c)}</option>`).join("")
-    + `<option value="__new__">＋ 新建分类…</option>`;
+  sel.innerHTML = `<option value="">-</option>`
+    + categoryNames().map((c) => `<option value="${esc(c)}"${c === cur ? " selected" : ""}>${esc(c)}</option>`).join("");
   td.innerHTML = "";
   td.appendChild(sel);
   sel.focus();
@@ -320,16 +414,21 @@ function inlineSelectCategory(td, m) {
   const restore = () => { td.dataset.editing = "0"; td.innerHTML = original; };
   sel.addEventListener("change", async () => {
     if (done) return;
-    let val = sel.value;
-    if (val === "__new__") {
-      val = (prompt("新建分类名称：") || "").trim();
-      if (!val) { restore(); return; }
-    }
     done = true;
     td.dataset.editing = "0";
+    const val = sel.value;
     if (val === cur) { td.innerHTML = original; return; }
-    try { await saveMetaField(m, { category: val }); }
-    catch (e) { alert("保存失败：" + e.message); td.innerHTML = original; }
+    try {
+      await saveMetaField(m, { category: val });
+      // 分类变了 → 询问是否按新分类的 Prompt 重新生成纪要
+      if (val && confirm(`已改为「${val}」分类。是否按该分类的 Prompt 重新生成会议纪要？`)) {
+        await api(`/api/meetings/${m.meeting_id}/regenerate`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ category: val }),
+        });
+        await refreshQueue();   // 重生成期间该条会进队列，转完自动回到列表
+      }
+    } catch (e) { alert("操作失败：" + e.message); td.innerHTML = original; }
   });
   sel.addEventListener("blur", () => { if (!done) restore(); });
 }
@@ -423,13 +522,26 @@ el("#file").addEventListener("change", () => {
   el("#file-name").textContent = !fs.length ? "点击选择音频 / 视频文件（可多选）"
     : fs.length === 1 ? fs[0].name : `已选择 ${fs.length} 个文件`;
   el("#file-label").classList.toggle("has-file", fs.length > 0);
+  renderUploadList();
 });
+
+function renderUploadList() {
+  const files = [...el("#file").files];
+  const box = el("#upload-list");
+  if (!files.length) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="up-head"><span>文件</span><span>说话人数</span></div>`
+    + files.map((f, i) => `<div class="up-row">
+        <span class="up-name" title="${esc(f.name)}">${esc(f.name)}</span>
+        <input type="number" min="1" max="50" class="field field-sm up-spk" data-i="${i}" placeholder="自动">
+      </div>`).join("");
+}
 
 el("#upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const files = [...el("#file").files];
   if (!files.length) { el("#upload-msg").textContent = "请先选择文件"; return; }
-  const tpl = el("#template").value;
+  const cat = el("#upload-category").value;
   const btn = el("#upload-btn");
   btn.disabled = true;
   let firstId = null, ok = 0;
@@ -438,7 +550,10 @@ el("#upload-form").addEventListener("submit", async (e) => {
     el("#upload-msg").textContent = `上传中 ${i + 1}/${files.length}…`;
     const fd = new FormData();
     fd.append("file", files[i]);
-    fd.append("template_type", tpl);
+    if (cat) fd.append("category", cat);
+    const spkEl = el(`.up-spk[data-i="${i}"]`);
+    const spk = spkEl ? parseInt(spkEl.value, 10) : NaN;
+    if (spk > 0) fd.append("spk_num", String(spk));
     try {
       const res = await api("/api/meetings", { method: "POST", body: fd });
       if (!firstId) firstId = res.meeting_id;
@@ -451,6 +566,7 @@ el("#upload-form").addEventListener("submit", async (e) => {
   el("#file").value = "";
   el("#file-name").textContent = "点击选择音频 / 视频文件（可多选）";
   el("#file-label").classList.remove("has-file");
+  renderUploadList();
   if (fails.length) {
     el("#upload-msg").textContent = `成功 ${ok} 个，失败 ${fails.length} 个：${fails.join("；")}`;
     await loadLibrary();
@@ -633,7 +749,12 @@ function renderHeader(m) {
   const badge = el("#m-status");
   badge.textContent = STATUS_LABEL[m.status] || m.status;
   badge.className = "badge " + statusClass(m.status);
-  if (m.template_type) el("#m-template").value = m.template_type;
+  const sel = el("#m-category-sel");
+  // 当前分类若不在库里（被删过/历史值），临时补一个选项以正确显示
+  if (m.category && !categoryNames().includes(m.category)) {
+    sel.insertAdjacentHTML("beforeend", `<option value="${esc(m.category)}">${esc(m.category)}</option>`);
+  }
+  sel.value = m.category || "";
 }
 
 function showProcessing(m) {
@@ -889,7 +1010,7 @@ el("#btn-regen").addEventListener("click", async () => {
     await api(`/api/meetings/${currentId}/regenerate`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        template_type: el("#m-template").value,
+        category: el("#m-category-sel").value,
         custom_instruction: el("#m-instruction").value.trim() || null,
       }),
     });
@@ -927,6 +1048,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!el("#meta-drawer").hidden) closeMetaDrawer();
   else if (!el("#hotword-modal").hidden) closeHotwordModal();
+  else if (!el("#category-modal").hidden) closeCategoryModal();
   else if (!el("#upload-modal").hidden) closeUploadModal();
   else if (!el("#queue-modal").hidden) el("#queue-modal").hidden = true;
   else if (!el("#voiceprint-modal").hidden) el("#voiceprint-modal").hidden = true;

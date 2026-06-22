@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     participants TEXT DEFAULT '[]',
     description TEXT DEFAULT '',
     audio_time TEXT DEFAULT '',
+    spk_num INTEGER DEFAULT 0,
     created_at TEXT,
     updated_at TEXT
 );
@@ -118,6 +119,7 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         _migrate_meetings_meta(conn)
         conn.commit()
+    _seed_categories_if_empty()
 
 
 def _migrate_meetings_meta(conn: sqlite3.Connection) -> None:
@@ -129,6 +131,7 @@ def _migrate_meetings_meta(conn: sqlite3.Connection) -> None:
         "participants": "TEXT DEFAULT '[]'",
         "description": "TEXT DEFAULT ''",
         "audio_time": "TEXT DEFAULT ''",
+        "spk_num": "INTEGER DEFAULT 0",
     }
     for col, ddl in add.items():
         if col not in cols:
@@ -337,6 +340,51 @@ def get_hotwords() -> List[str]:
         return [str(w).strip() for w in words if str(w).strip()]
     except json.JSONDecodeError:
         return []
+
+
+# ---------- 分类库（名称 + 总结 Prompt） ----------
+def get_categories() -> List[Dict[str, str]]:
+    raw = get_setting("categories")
+    if raw is None:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    out: List[Dict[str, str]] = []
+    for c in data:
+        name = str(c.get("name", "")).strip()
+        if name:
+            out.append({"name": name, "prompt": str(c.get("prompt", "")).strip()})
+    return out
+
+
+def set_categories(cats: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    cleaned: List[Dict[str, str]] = []
+    seen = set()
+    for c in cats:
+        name = str(c.get("name", "")).strip()
+        if name and name not in seen:
+            seen.add(name)
+            cleaned.append({"name": name, "prompt": str(c.get("prompt", "")).strip()})
+    set_setting("categories", json.dumps(cleaned, ensure_ascii=False))
+    return cleaned
+
+
+def get_category_prompt(name: str) -> Optional[str]:
+    name = (name or "").strip()
+    if not name:
+        return None
+    for c in get_categories():
+        if c["name"] == name:
+            return c["prompt"] or None
+    return None
+
+
+def _seed_categories_if_empty() -> None:
+    if get_setting("categories") is None:
+        from .templates_prompts import category_seed
+        set_setting("categories", json.dumps(category_seed(), ensure_ascii=False))
 
 
 def set_hotwords(words: List[str]) -> List[str]:
