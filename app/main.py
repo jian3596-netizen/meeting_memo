@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -19,11 +20,15 @@ from . import config, db, export, pipeline
 from .models import (
     CreateMeetingResponse,
     HotwordsRequest,
+    MeetingMetaRequest,
     MeetingSummary,
     RegenerateRequest,
     StatusResponse,
     VoiceprintEnrollRequest,
 )
+
+# 预置分类（前端也会并入用户已有的分类）
+PRESET_CATEGORIES = ["项目会议", "例会", "客户拜访", "访谈", "日常记录"]
 from .templates_prompts import TEMPLATES
 
 app = FastAPI(title="AI 会议纪要系统", version="0.1.0")
@@ -32,6 +37,8 @@ app = FastAPI(title="AI 会议纪要系统", version="0.1.0")
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    pipeline.start_worker()       # 单线程串行处理队列
+    pipeline.requeue_pending()    # 重启后继续处理未完成的会议
 
 
 def _spawn(target, *args) -> None:
@@ -43,6 +50,33 @@ def _require(mid: str) -> Dict:
     if not m:
         raise HTTPException(status_code=404, detail="会议不存在")
     return m
+
+
+def _jload(raw, default):
+    try:
+        return json.loads(raw) if raw else default
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def _meta_fields(m: Dict) -> Dict:
+    """从 meeting 行解析出录音管理元数据；人员为空时回落到已识别的说话人。"""
+    participants = _jload(m.get("participants"), [])
+    if not participants:
+        smap = _jload(m.get("speaker_map"), {})
+        order: List[str] = []
+        for v in (smap.values() if isinstance(smap, dict) else []):
+            v = (v or "").strip()
+            if v and v not in order:
+                order.append(v)
+        participants = order
+    return {
+        "category": m.get("category") or "",
+        "tags": _jload(m.get("tags"), []),
+        "participants": participants,
+        "description": m.get("description") or "",
+        "audio_time": m.get("audio_time") or "",
+    }
 
 
 def _content_disposition(filename: str) -> str:
@@ -82,7 +116,7 @@ async def create_meeting(
         shutil.copyfileobj(file.file, out)
     db.update_meeting(mid, audio_path=str(dest))
 
-    _spawn(pipeline.process_meeting, mid)
+    pipeline.enqueue_meeting(mid)   # 入队，由单线程串行处理
     return CreateMeetingResponse(meeting_id=mid, status="uploaded")
 
 
@@ -173,10 +207,46 @@ def list_meetings() -> Dict:
             "template_type": m["template_type"],
             "duration_sec": m["duration_sec"],
             "created_at": m["created_at"],
+            **_meta_fields(m),
         }
         for m in db.list_meetings()
     ]
-    return {"meetings": items, "templates": TEMPLATES}
+    return {"meetings": items, "templates": TEMPLATES, "preset_categories": PRESET_CATEGORIES}
+
+
+@app.patch("/api/meetings/{mid}/meta")
+def update_meeting_meta(mid: str, req: MeetingMetaRequest) -> Dict:
+    """更新录音管理元数据：标题 / 分类 / 标签 / 人员 / 描述。"""
+    _require(mid)
+    fields: Dict = {}
+    if req.title is not None:
+        t = req.title.strip()
+        if t:
+            fields["title"] = t
+    if req.category is not None:
+        fields["category"] = req.category.strip()
+    if req.description is not None:
+        fields["description"] = req.description.strip()
+    if req.audio_time is not None:
+        fields["audio_time"] = req.audio_time.strip()
+    if req.tags is not None:
+        clean = []
+        for t in req.tags:
+            t = (t or "").strip()
+            if t and t not in clean:
+                clean.append(t)
+        fields["tags"] = json.dumps(clean, ensure_ascii=False)
+    if req.participants is not None:
+        clean = []
+        for p in req.participants:
+            p = (p or "").strip()
+            if p and p not in clean:
+                clean.append(p)
+        fields["participants"] = json.dumps(clean, ensure_ascii=False)
+    if fields:
+        db.update_meeting(mid, **fields)
+    m = db.get_meeting(mid) or {}
+    return {"ok": True, "meeting": {"meeting_id": mid, "title": m.get("title"), **_meta_fields(m)}}
 
 
 @app.get("/api/meetings/{mid}")
@@ -193,6 +263,7 @@ def get_meeting(mid: str) -> Dict:
         "failed_step": m["failed_step"],
         "error_message": m["error_message"],
         "speaker_map": db.get_speaker_map(mid),
+        **_meta_fields(m),
     }
 
 

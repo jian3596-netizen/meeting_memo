@@ -8,6 +8,10 @@ let templatesCache = null;
 let hotwords = [];
 let voiceprints = [];
 let currentSummary = null;
+let allMeetings = [];
+let presetCategories = ["项目会议", "例会", "客户拜访", "访谈", "日常记录"];
+let activeTagFilter = new Set();
+let queuePollTimer = null;
 
 const STATUS_LABEL = {
   uploaded: "已上传，排队中",
@@ -31,6 +35,7 @@ function fmtDur(sec) {
   const p = (n) => String(n).padStart(2, "0");
   return `${p(h)}:${p(m)}:${p(s)}`;
 }
+function fmtDate(iso) { return iso ? String(iso).slice(0, 10) : ""; }
 function tsToSeconds(ts) {
   if (!ts || ts === "未明确") return null;
   const parts = String(ts).split(":").map(Number);
@@ -47,6 +52,8 @@ async function api(path, opts) {
   }
   return r.json();
 }
+function statusClass(s) { return s === "completed" ? "completed" : s === "failed" ? "failed" : "running"; }
+function fillDatalist(sel, arr) { el(sel).innerHTML = arr.map((v) => `<option value="${esc(v)}">`).join(""); }
 
 // ---------- 时间戳回听（转写 .ts 与 纪要 .src 共用） ----------
 document.addEventListener("click", (e) => {
@@ -68,27 +75,400 @@ function fillTemplates(templates) {
   el("#m-template").innerHTML = opts;
 }
 
+// ---------- 视图切换 ----------
+function showLibrary() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  currentId = null;
+  el("#meeting-view").hidden = true;
+  el("#library-view").hidden = false;
+  el("#nav-library").classList.add("active");
+  loadLibrary();
+}
+function openMeeting(id) {
+  el("#library-view").hidden = true;
+  el("#meeting-view").hidden = false;
+  selectMeeting(id);
+}
+el("#nav-library").addEventListener("click", showLibrary);
+el("#btn-back").addEventListener("click", showLibrary);
+
+// ---------- 录音库 ----------
+async function loadLibrary() {
+  const data = await api("/api/meetings");
+  if (data.templates && !templatesCache) fillTemplates(data.templates);
+  if (data.preset_categories) presetCategories = data.preset_categories;
+  allMeetings = data.meetings || [];
+  buildFilterOptions();
+  renderCards();
+  updateQueueBadge();
+  ensureQueuePolling();
+}
+
+// ---------- 处理队列（右上角） ----------
+function pendingMeetings() {
+  return allMeetings.filter((m) => m.status !== "completed");  // 排队中/处理中/失败
+}
+function updateQueueBadge() {
+  const n = pendingMeetings().length;
+  const b = el("#queue-badge");
+  b.textContent = n;
+  b.hidden = n === 0;
+}
+function ensureQueuePolling() {
+  const running = allMeetings.some((m) => RUNNING.has(m.status));
+  if (running && !queuePollTimer) {
+    queuePollTimer = setInterval(refreshQueue, 2500);
+  } else if (!running && queuePollTimer) {
+    clearInterval(queuePollTimer); queuePollTimer = null;
+  }
+}
+async function refreshQueue() {
+  let data;
+  try { data = await api("/api/meetings"); } catch (e) { return; }
+  allMeetings = data.meetings || [];
+  updateQueueBadge();
+  if (!el("#queue-modal").hidden) renderQueue();
+  if (!el("#library-view").hidden) { buildFilterOptions(); renderCards(); }
+  ensureQueuePolling();
+}
+function renderQueue() {
+  const box = el("#queue-list");
+  const list = pendingMeetings();
+  if (!list.length) {
+    box.innerHTML = `<div class="tags-empty" style="padding:10px">队列为空，所有录音都已处理完成。</div>`;
+    return;
+  }
+  box.innerHTML = list.map((m) => {
+    const failed = m.status === "failed";
+    const label = (STATUS_LABEL[m.status] || m.status) + (failed ? "" : `（${m.progress || 0}%）`);
+    return `<div class="q-item" data-id="${m.meeting_id}">
+      <div class="q-main">
+        <div class="q-title" title="${esc(m.title || "未命名")}">${esc(m.title || "未命名")}</div>
+        <span class="badge ${statusClass(m.status)}">${esc(label)}</span>
+        <button class="q-del rec-btn rec-del" title="删除">🗑</button>
+      </div>
+      ${failed ? `<div class="q-err">${esc(m.error_message || "处理失败")}</div>`
+        : `<div class="q-progress"><div style="width:${m.progress || 0}%"></div></div>`}
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".q-del").forEach((b) => b.addEventListener("click", async () => {
+    const id = b.closest(".q-item").dataset.id;
+    if (!confirm("从队列中删除这条录音？")) return;
+    try { await api(`/api/meetings/${id}`, { method: "DELETE" }); await refreshQueue(); }
+    catch (e) { alert("删除失败：" + e.message); }
+  }));
+}
+function openQueueModal() { renderQueue(); el("#queue-modal").hidden = false; refreshQueue(); }
+el("#btn-queue-open").addEventListener("click", openQueueModal);
+el("#queue-close").addEventListener("click", () => { el("#queue-modal").hidden = true; });
+el("#queue-modal").addEventListener("click", (e) => { if (e.target.id === "queue-modal") el("#queue-modal").hidden = true; });
+
+function allCategories() {
+  const cats = new Set(presetCategories);
+  allMeetings.forEach((m) => { if (m.category) cats.add(m.category); });
+  return [...cats];
+}
+function allTags() {
+  const tags = new Set();
+  allMeetings.forEach((m) => (m.tags || []).forEach((t) => tags.add(t)));
+  return [...tags];
+}
+function allPeople() {
+  const ppl = new Set();
+  allMeetings.forEach((m) => (m.participants || []).forEach((p) => ppl.add(p)));
+  voiceprints.forEach((v) => ppl.add(v.name));
+  return [...ppl];
+}
+
+function buildFilterOptions() {
+  const cats = allCategories();
+  const sel = el("#lib-category");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">全部分类</option>` +
+    cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  sel.value = cats.includes(cur) ? cur : "";
+
+  const tags = allTags();
+  // 清掉已不存在的标签筛选
+  activeTagFilter = new Set([...activeTagFilter].filter((t) => tags.includes(t)));
+  el("#lib-tagfilter").innerHTML = tags.length
+    ? tags.map((t) => `<span class="tag tag-filter${activeTagFilter.has(t) ? " active" : ""}" data-tag="${esc(t)}">${esc(t)}</span>`).join("")
+    : `<span class="tags-empty">还没有标签，进某条录音点「编辑信息」可添加</span>`;
+  el("#lib-tagfilter").querySelectorAll(".tag-filter").forEach((x) => x.addEventListener("click", () => {
+    const t = x.dataset.tag;
+    if (activeTagFilter.has(t)) activeTagFilter.delete(t); else activeTagFilter.add(t);
+    buildFilterOptions(); renderCards();
+  }));
+}
+
+function renderCards() {
+  const grid = el("#card-grid");
+  const empty = el("#lib-empty");
+  // 录音库只展示「已完成」；处理中/失败的在右上角「队列」里看
+  const completed = allMeetings.filter((m) => m.status === "completed");
+  if (!completed.length) {
+    grid.innerHTML = "";
+    empty.hidden = false;
+    empty.innerHTML = `<div class="empty-icon">📋</div><div class="empty-title">还没有已完成的录音</div>
+      <div class="empty-sub">点右上角「＋ 上传录音」开始；处理进度看「队列」</div>`;
+    return;
+  }
+  const q = el("#lib-search").value.trim().toLowerCase();
+  const cat = el("#lib-category").value;
+  const list = completed.filter((m) => {
+    if (cat && (m.category || "") !== cat) return false;
+    if (activeTagFilter.size) {
+      const mt = new Set(m.tags || []);
+      for (const t of activeTagFilter) if (!mt.has(t)) return false;
+    }
+    if (q) {
+      const hay = [m.title, m.description, m.category, m.audio_time, (m.tags || []).join(" "), (m.participants || []).join(" ")]
+        .join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  if (!list.length) {
+    grid.innerHTML = "";
+    empty.hidden = false;
+    empty.innerHTML = `<div class="empty-icon">🔍</div><div class="empty-title">没有匹配的录音</div>
+      <div class="empty-sub">换个搜索词或清掉筛选</div>`;
+    return;
+  }
+  empty.hidden = true;
+  grid.innerHTML = `<table class="lib-table">
+    <thead><tr>
+      <th>分类</th><th>标题</th><th>描述</th><th>音频时间</th><th>时长</th><th>人员</th><th>标签</th><th></th>
+    </tr></thead>
+    <tbody>${list.map(rowHtml).join("")}</tbody>
+  </table>`;
+}
+
+function rowHtml(m) {
+  const muted = `<span class="lib-muted">—</span>`;
+  const title = esc(m.title || "未命名会议");
+  const cat = m.category ? esc(m.category) : muted;
+  const desc = m.description ? esc(m.description) : "";
+  const atime = m.audio_time || fmtDate(m.created_at);
+  const peopleStr = (m.participants || []).join("、");
+  const people = peopleStr ? esc(peopleStr) : muted;
+  const tags = (m.tags || []).length
+    ? (m.tags || []).map((t) => `<span class="tag tag-mini">${esc(t)}</span>`).join("")
+    : muted;
+  return `<tr class="lib-row" data-id="${m.meeting_id}">
+    <td class="lib-edit lib-cat" data-field="category" title="双击编辑分类">${cat}</td>
+    <td class="lib-edit lib-titlecell" data-field="title" title="${title}"><div class="lib-title">${title}</div></td>
+    <td class="lib-edit lib-desccell" data-field="description" title="${esc(m.description || "")}"><div class="lib-desc">${desc || muted}</div></td>
+    <td class="lib-edit lib-nowrap" data-field="audio_time" title="双击编辑（如 2026-06-22）">${esc(atime) || muted}</td>
+    <td class="lib-nowrap">${fmtDur(m.duration_sec)}</td>
+    <td class="lib-people" title="${esc(peopleStr)}（由声纹识别，不可手动改）">${people}</td>
+    <td class="lib-edit lib-tagcell" data-field="tags" title="双击编辑（顿号/逗号分隔）">${tags}</td>
+    <td class="lib-ops"><button class="rec-btn rec-view" title="查看详情">👁</button></td>
+  </tr>`;
+}
+
+// 录音库：点「👁 查看」进详情；双击单元格行内编辑（两者分开，避免误操作）
+el("#card-grid").addEventListener("click", (e) => {
+  const v = e.target.closest(".rec-view");
+  if (!v) return;
+  const tr = v.closest(".lib-row");
+  if (tr) openMeeting(tr.dataset.id);
+});
+el("#card-grid").addEventListener("dblclick", (e) => {
+  const td = e.target.closest("td.lib-edit");
+  if (!td || td.dataset.editing === "1") return;
+  const m = allMeetings.find((x) => x.meeting_id === td.closest("tr").dataset.id);
+  if (!m) return;
+  const field = td.dataset.field;
+  if (field === "category") { inlineSelectCategory(td, m); return; }
+  const cur = field === "tags" ? (m.tags || []).join("、")
+    : field === "audio_time" ? (m.audio_time || fmtDate(m.created_at))
+    : (m[field] || "");
+  inlineEdit(td, cur, field === "description", async (nv) => {
+    const body = {};
+    body[field] = field === "tags" ? nv.split(/[,，、]/).map((s) => s.trim()).filter(Boolean) : nv;
+    await saveMetaField(m, body);
+  });
+});
+
+/** 把某条会议的元数据局部更新并重渲染。 */
+async function saveMetaField(m, body) {
+  const r = await api(`/api/meetings/${m.meeting_id}/meta`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  Object.assign(m, r.meeting);
+  buildFilterOptions();
+  renderCards();
+}
+
+/** 分类单元格：双击 → 下拉选择（含「＋ 新建分类…」）。 */
+function inlineSelectCategory(td, m) {
+  if (td.dataset.editing === "1") return;
+  td.dataset.editing = "1";
+  const original = td.innerHTML;
+  const cur = m.category || "";
+  const sel = document.createElement("select");
+  sel.className = "inline-field";
+  sel.innerHTML = `<option value="">（未分类）</option>`
+    + allCategories().map((c) => `<option value="${esc(c)}"${c === cur ? " selected" : ""}>${esc(c)}</option>`).join("")
+    + `<option value="__new__">＋ 新建分类…</option>`;
+  td.innerHTML = "";
+  td.appendChild(sel);
+  sel.focus();
+  let done = false;
+  const restore = () => { td.dataset.editing = "0"; td.innerHTML = original; };
+  sel.addEventListener("change", async () => {
+    if (done) return;
+    let val = sel.value;
+    if (val === "__new__") {
+      val = (prompt("新建分类名称：") || "").trim();
+      if (!val) { restore(); return; }
+    }
+    done = true;
+    td.dataset.editing = "0";
+    if (val === cur) { td.innerHTML = original; return; }
+    try { await saveMetaField(m, { category: val }); }
+    catch (e) { alert("保存失败：" + e.message); td.innerHTML = original; }
+  });
+  sel.addEventListener("blur", () => { if (!done) restore(); });
+}
+
+el("#lib-search").addEventListener("input", renderCards);
+el("#lib-category").addEventListener("change", renderCards);
+
+// ---------- 录音信息编辑（抽屉） ----------
+let metaEditId = null;
+let tagChips;
+
+function makeChipEditor(boxSel, inputSel) {
+  let items = [];
+  const box = el(boxSel), input = el(inputSel);
+  function render() {
+    box.innerHTML = items.length
+      ? items.map((w, i) => `<span class="tag">${esc(w)}<span class="x" data-i="${i}">×</span></span>`).join("")
+      : `<span class="tags-empty">（空）</span>`;
+    box.querySelectorAll(".x").forEach((x) => x.addEventListener("click", () => { items.splice(+x.dataset.i, 1); render(); }));
+  }
+  function add(v) { v = (v || "").trim(); if (v && !items.includes(v)) { items.push(v); render(); } }
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); add(input.value); input.value = ""; }
+  });
+  input.addEventListener("blur", () => { add(input.value); input.value = ""; });
+  return {
+    get() { add(input.value); input.value = ""; return items.slice(); },
+    set(a) { items = (a || []).slice(); render(); },
+  };
+}
+
+function openMetaDrawer(id) {
+  const m = allMeetings.find((x) => x.meeting_id === id);
+  if (!m) return;
+  metaEditId = id;
+  el("#meta-title").value = m.title || "";
+  el("#meta-category").value = m.category || "";
+  el("#meta-desc").value = m.description || "";
+  el("#meta-audio-time").value = m.audio_time || fmtDate(m.created_at);
+  el("#meta-people-view").textContent = (m.participants || []).join("、") || "（声纹识别后自动出现）";
+  tagChips.set(m.tags || []);
+  fillDatalist("#category-options", allCategories());
+  fillDatalist("#tag-options", allTags());
+  el("#meta-drawer").hidden = false;
+  el("#meta-title").focus();
+}
+function closeMetaDrawer() { el("#meta-drawer").hidden = true; metaEditId = null; }
+
+async function saveMeta() {
+  if (!metaEditId) return;
+  const body = {
+    title: el("#meta-title").value.trim(),
+    category: el("#meta-category").value.trim(),
+    description: el("#meta-desc").value.trim(),
+    audio_time: el("#meta-audio-time").value.trim(),
+    tags: tagChips.get(),
+  };
+  const btn = el("#meta-save");
+  btn.disabled = true; btn.textContent = "保存中…";
+  try {
+    await api(`/api/meetings/${metaEditId}/meta`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const wasCurrent = metaEditId === currentId;
+    closeMetaDrawer();
+    await loadLibrary();
+    if (wasCurrent) el("#m-title").textContent = body.title || el("#m-title").textContent;
+  } catch (e) { alert("保存失败：" + e.message); }
+  finally { btn.disabled = false; btn.textContent = "保存"; }
+}
+
+el("#meta-close").addEventListener("click", closeMetaDrawer);
+el("#meta-cancel").addEventListener("click", closeMetaDrawer);
+el("#meta-save").addEventListener("click", saveMeta);
+el("#meta-drawer").addEventListener("click", (e) => { if (e.target.id === "meta-drawer") closeMetaDrawer(); });
+el("#btn-edit-meta").addEventListener("click", () => { if (currentId) openMetaDrawer(currentId); });
+
+// ---------- 上传弹窗 ----------
+function openUploadModal() {
+  el("#upload-msg").textContent = "";
+  el("#upload-modal").hidden = false;
+}
+function closeUploadModal() { el("#upload-modal").hidden = true; }
+el("#btn-upload-open").addEventListener("click", openUploadModal);
+el("#upload-close").addEventListener("click", closeUploadModal);
+el("#upload-modal").addEventListener("click", (e) => { if (e.target.id === "upload-modal") closeUploadModal(); });
+
+el("#file").addEventListener("change", () => {
+  const fs = el("#file").files;
+  el("#file-name").textContent = !fs.length ? "点击选择音频 / 视频文件（可多选）"
+    : fs.length === 1 ? fs[0].name : `已选择 ${fs.length} 个文件`;
+  el("#file-label").classList.toggle("has-file", fs.length > 0);
+});
+
+el("#upload-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const files = [...el("#file").files];
+  if (!files.length) { el("#upload-msg").textContent = "请先选择文件"; return; }
+  const tpl = el("#template").value;
+  const btn = el("#upload-btn");
+  btn.disabled = true;
+  let firstId = null, ok = 0;
+  const fails = [];
+  for (let i = 0; i < files.length; i++) {
+    el("#upload-msg").textContent = `上传中 ${i + 1}/${files.length}…`;
+    const fd = new FormData();
+    fd.append("file", files[i]);
+    fd.append("template_type", tpl);
+    try {
+      const res = await api("/api/meetings", { method: "POST", body: fd });
+      if (!firstId) firstId = res.meeting_id;
+      ok++;
+    } catch (err) {
+      fails.push(`${files[i].name}：${err.message}`);
+    }
+  }
+  btn.disabled = false;
+  el("#file").value = "";
+  el("#file-name").textContent = "点击选择音频 / 视频文件（可多选）";
+  el("#file-label").classList.remove("has-file");
+  if (fails.length) {
+    el("#upload-msg").textContent = `成功 ${ok} 个，失败 ${fails.length} 个：${fails.join("；")}`;
+    await loadLibrary();
+    return;
+  }
+  // 全部成功：单个直接进详情，多个回到录音库看队列
+  closeUploadModal();
+  el("#upload-msg").textContent = "";
+  if (files.length === 1 && firstId) { openMeeting(firstId); refreshQueue(); }
+  else showLibrary();
+});
+
 // ---------- 热词 ----------
 let hwDraft = [];
 
 async function loadHotwords() {
-  try {
-    const d = await api("/api/hotwords");
-    hotwords = d.hotwords || [];
-  } catch (e) { hotwords = []; }
-  renderHotwordSummary();
-}
-function renderHotwordSummary() {
-  el("#hotword-count").textContent = `${hotwords.length} 个热词`;
-  const box = el("#hotword-preview");
-  if (!hotwords.length) {
-    box.innerHTML = `<span class="tags-empty">暂无热词，点"管理"添加专有名词/人名/项目词</span>`;
-    return;
-  }
-  const PREV = 8;
-  const shown = hotwords.slice(0, PREV).map((w) => `<span class="tag">${esc(w)}</span>`).join("");
-  const more = hotwords.length > PREV ? `<span class="tags-empty">+${hotwords.length - PREV} 更多</span>` : "";
-  box.innerHTML = shown + more;
+  try { const d = await api("/api/hotwords"); hotwords = d.hotwords || []; }
+  catch (e) { hotwords = []; }
 }
 
 function openHotwordModal() {
@@ -149,13 +529,12 @@ async function hwSave() {
       body: JSON.stringify({ hotwords: hwDraft }),
     });
     hotwords = d.hotwords || [];
-    renderHotwordSummary();
     closeHotwordModal();
   } catch (e) { alert("保存失败：" + e.message); }
   finally { btn.disabled = false; }
 }
 
-el("#hotword-manage").addEventListener("click", openHotwordModal);
+el("#btn-hotword-open").addEventListener("click", openHotwordModal);
 el("#hw-close").addEventListener("click", closeHotwordModal);
 el("#hw-cancel").addEventListener("click", closeHotwordModal);
 el("#hotword-modal").addEventListener("click", (e) => { if (e.target.id === "hotword-modal") closeHotwordModal(); });
@@ -167,31 +546,25 @@ el("#hw-save").addEventListener("click", hwSave);
 el("#hw-bulk-toggle").addEventListener("click", () => {
   const bulk = el("#hw-bulk");
   if (bulk.hidden) {
-    // 打开批量编辑：隐藏 chips，避免两块同时撑高弹窗
     el("#hw-bulk-text").value = hwDraft.join("\n");
     bulk.hidden = false;
     el("#hw-chips").hidden = true;
     el("#hw-bulk-toggle").textContent = "完成编辑";
   } else {
-    // 再次点击 = 应用文本并返回 chips 视图
     hwApplyBulk();
   }
 });
 el("#hw-bulk-apply").addEventListener("click", hwApplyBulk);
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !el("#hotword-modal").hidden) closeHotwordModal();
-});
 
 // ---------- 声纹库 ----------
 async function loadVoiceprints() {
-  try {
-    const d = await api("/api/voiceprints");
-    voiceprints = d.voiceprints || [];
-  } catch (e) { voiceprints = []; }
+  try { const d = await api("/api/voiceprints"); voiceprints = d.voiceprints || []; }
+  catch (e) { voiceprints = []; }
   renderVoiceprints();
 }
 function renderVoiceprints() {
   const box = el("#voiceprint-list");
+  if (!box) return;
   if (!voiceprints.length) {
     box.innerHTML = `<span class="tags-empty">还没有声纹。在会议详情里给说话人填名字后点「存声纹」，以后会自动识别</span>`;
     return;
@@ -227,71 +600,18 @@ async function enrollVoiceprint(spk, btn) {
     if (btn) { btn.disabled = false; btn.textContent = "存声纹"; }
   }
 }
-
-// ---------- 文件选择 ----------
-el("#file").addEventListener("change", () => {
-  const f = el("#file").files[0];
-  el("#file-name").textContent = f ? f.name : "点击选择音频 / 视频文件";
-  el("#file-label").classList.toggle("has-file", !!f);
-});
-
-// ---------- 列表 ----------
-async function loadList() {
-  const data = await api("/api/meetings");
-  if (data.templates && !templatesCache) fillTemplates(data.templates);
-  const ul = el("#meeting-list");
-  if (!data.meetings.length) {
-    ul.innerHTML = `<li class="tags-empty" style="padding:8px">还没有会议</li>`;
-    return;
-  }
-  ul.innerHTML = data.meetings.map((m) => `
-    <li class="meeting-item ${m.meeting_id === currentId ? "active" : ""}" data-id="${m.meeting_id}">
-      <div class="meeting-item-title">${esc(m.title || "未命名会议")}</div>
-      <div class="meeting-item-meta">
-        <span class="badge ${m.status === "completed" ? "completed" : m.status === "failed" ? "failed" : "running"}">${esc(STATUS_LABEL[m.status] || m.status)}</span>
-        <span class="meeting-item-dur">${fmtDur(m.duration_sec)}</span>
-      </div>
-    </li>`).join("");
-  ul.querySelectorAll(".meeting-item").forEach((li) =>
-    li.addEventListener("click", () => selectMeeting(li.dataset.id)));
-}
-
-// ---------- 上传 ----------
-el("#upload-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const file = el("#file").files[0];
-  if (!file) { el("#upload-msg").textContent = "请先选择文件"; return; }
-  const fd = new FormData();
-  fd.append("file", file);
-  fd.append("template_type", el("#template").value);
-  const btn = el("#upload-btn");
-  btn.disabled = true;
-  el("#upload-msg").textContent = "上传中…";
-  try {
-    const res = await api("/api/meetings", { method: "POST", body: fd });
-    el("#upload-msg").textContent = "已上传，开始处理。";
-    el("#file").value = "";
-    el("#file-name").textContent = "点击选择音频 / 视频文件";
-    el("#file-label").classList.remove("has-file");
-    await loadList();
-    selectMeeting(res.meeting_id);
-  } catch (err) {
-    el("#upload-msg").textContent = "上传失败：" + err.message;
-  } finally {
-    btn.disabled = false;
-  }
-});
+el("#btn-voiceprint-open").addEventListener("click", () => { el("#voiceprint-modal").hidden = false; });
+el("#vp-close").addEventListener("click", () => { el("#voiceprint-modal").hidden = true; });
+el("#voiceprint-modal").addEventListener("click", (e) => { if (e.target.id === "voiceprint-modal") el("#voiceprint-modal").hidden = true; });
 
 // ---------- 选择 / 轮询 ----------
 async function selectMeeting(id) {
   currentId = id;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  el("#empty").hidden = true;
-  el("#meeting-view").hidden = false;
   el("#error-area").innerHTML = "";
   el("#result").hidden = true;
   el("#audio-card").hidden = true;
-  await loadList();
+  el("#processing").hidden = true;
 
   const m = await api(`/api/meetings/${id}`);
   renderHeader(m);
@@ -312,8 +632,7 @@ function renderHeader(m) {
   el("#m-title").textContent = m.title || "未命名会议";
   const badge = el("#m-status");
   badge.textContent = STATUS_LABEL[m.status] || m.status;
-  badge.className = "badge " + (m.status === "completed" ? "completed"
-    : m.status === "failed" ? "failed" : "running");
+  badge.className = "badge " + statusClass(m.status);
   if (m.template_type) el("#m-template").value = m.template_type;
 }
 
@@ -337,17 +656,15 @@ function startPoll(id) {
     showProcessing(s);
     const badge = el("#m-status");
     badge.textContent = STATUS_LABEL[s.status] || s.status;
-    badge.className = "badge " + (RUNNING.has(s.status) ? "running" : s.status);
+    badge.className = "badge " + (RUNNING.has(s.status) ? "running" : statusClass(s.status));
     if (s.status === "completed") {
       clearInterval(pollTimer); pollTimer = null;
       el("#processing").hidden = true;
       renderHeader(await api(`/api/meetings/${id}`));
       await renderResults(id);
-      loadList();
     } else if (s.status === "failed") {
       clearInterval(pollTimer); pollTimer = null;
       showError(s);
-      loadList();
     }
   }, 2000);
 }
@@ -501,7 +818,7 @@ function bindInlineEditing(containerSel, rerender) {
       setByPath(currentSummary, path, nv || (unset ? "未明确" : ""));
       await saveSummary();
       rerender();
-      if (path === "title") { el("#m-title").textContent = currentSummary.title; loadList(); }
+      if (path === "title") { el("#m-title").textContent = currentSummary.title; loadLibrary(); }
     });
   });
 }
@@ -588,11 +905,8 @@ el("#btn-regen").addEventListener("click", async () => {
 
 el("#btn-delete").addEventListener("click", async () => {
   if (!currentId || !confirm("确定删除这场会议？")) return;
-  await api(`/api/meetings/${currentId}`, { method: "DELETE" });
-  currentId = null;
-  el("#meeting-view").hidden = true;
-  el("#empty").hidden = false;
-  loadList();
+  try { await api(`/api/meetings/${currentId}`, { method: "DELETE" }); showLibrary(); }
+  catch (e) { alert("删除失败：" + e.message); }
 });
 
 // ---------- 双击行内编辑（纪要 / 待办 / 标题） ----------
@@ -604,21 +918,22 @@ el("#m-title").addEventListener("dblclick", () => {
     currentSummary.title = nv || currentSummary.title;
     await saveSummary();
     el("#m-title").textContent = currentSummary.title;
-    loadList();
+    loadLibrary();
   });
 });
 
-// ---------- 侧栏收起 / 展开 ----------
-function setSidebar(collapsed) {
-  el("#app").classList.toggle("sidebar-collapsed", collapsed);
-  el("#sidebar-expand").hidden = !collapsed;
-  try { localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0"); } catch (e) {}
-}
-el("#sidebar-collapse").addEventListener("click", () => setSidebar(true));
-el("#sidebar-expand").addEventListener("click", () => setSidebar(false));
-setSidebar((() => { try { return localStorage.getItem("sidebarCollapsed") === "1"; } catch (e) { return false; } })());
+// ---------- 全局 Esc 关闭弹窗 / 抽屉 ----------
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!el("#meta-drawer").hidden) closeMetaDrawer();
+  else if (!el("#hotword-modal").hidden) closeHotwordModal();
+  else if (!el("#upload-modal").hidden) closeUploadModal();
+  else if (!el("#queue-modal").hidden) el("#queue-modal").hidden = true;
+  else if (!el("#voiceprint-modal").hidden) el("#voiceprint-modal").hidden = true;
+});
 
 // ---------- init ----------
+tagChips = makeChipEditor("#meta-tags", "#meta-tag-input");
 loadHotwords();
 loadVoiceprints();
-loadList();
+showLibrary();

@@ -8,71 +8,43 @@
 </head>
 <body>
 <div id="app" class="app-shell">
-  <button id="sidebar-expand" class="sidebar-expand" title="展开侧栏" hidden>»</button>
-  <aside class="sidebar">
+  <!-- 顶栏 -->
+  <header class="topbar">
     <div class="brand">
       <div class="brand-logo">🎙️</div>
-      <div>
-        <div class="brand-title">AI 会议纪要</div>
-        <div class="brand-sub">上传音频，自动成纪要</div>
-      </div>
-      <button id="sidebar-collapse" class="icon-btn" title="收起侧栏">«</button>
+      <div class="brand-title">AI 会议纪要</div>
     </div>
-
-    <!-- 上传 -->
-    <section class="card">
-      <div class="card-title">新建会议</div>
-      <form id="upload-form">
-        <label class="file-drop" id="file-label">
-          <input type="file" id="file" accept="audio/*,video/*" hidden required>
-          <span class="file-icon">⬆️</span>
-          <span class="file-hint" id="file-name">点击选择音频 / 视频文件</span>
-        </label>
-        <select id="template" class="field"></select>
-        <button type="submit" id="upload-btn" class="btn btn-primary btn-block">上传并处理</button>
-        <div id="upload-msg" class="hint"></div>
-      </form>
-    </section>
-
-    <!-- 会议列表 -->
-    <section class="card">
-      <div class="card-title">会议列表</div>
-      <ul id="meeting-list" class="meeting-list"></ul>
-    </section>
-
-    <!-- 热词词库 -->
-    <section class="card">
-      <div class="card-title">
-        热词词库 <span class="card-title-sub">提升专有名词识别</span>
-      </div>
-      <div class="hotword-summary">
-        <span id="hotword-count" class="hotword-count">0 个热词</span>
-        <button id="hotword-manage" class="btn btn-secondary btn-sm">管理</button>
-      </div>
-      <div id="hotword-preview" class="tags"></div>
-    </section>
-
-    <!-- 声纹库 -->
-    <section class="card">
-      <div class="card-title">
-        声纹库 <span class="card-title-sub">自动识别说话人</span>
-      </div>
-      <div id="voiceprint-list" class="tags"></div>
-    </section>
-  </aside>
-
-  <main class="main-panel" id="detail">
-    <div id="empty" class="empty-state">
-      <div class="empty-icon">📋</div>
-      <div class="empty-title">还没有选择会议</div>
-      <div class="empty-sub">从左侧上传音频，或选择一个已有会议查看纪要</div>
+    <nav class="topnav">
+      <button id="nav-library" class="topnav-item active">录音库</button>
+    </nav>
+    <div class="topbar-actions">
+      <button id="btn-upload-open" class="btn btn-primary btn-sm">＋ 上传录音</button>
+      <button id="btn-queue-open" class="btn btn-secondary btn-sm queue-btn">队列<span id="queue-badge" class="queue-badge" hidden>0</span></button>
+      <button id="btn-hotword-open" class="btn btn-secondary btn-sm">热词</button>
+      <button id="btn-voiceprint-open" class="btn btn-secondary btn-sm">声纹库</button>
     </div>
+  </header>
 
-    <div id="meeting-view" hidden>
+  <main class="content">
+    <!-- ============ 录音库 ============ -->
+    <section id="library-view">
+      <div class="filter-bar">
+        <input type="text" id="lib-search" class="field" placeholder="搜索标题 / 描述 / 人员 / 标签…">
+        <select id="lib-category" class="field field-sm"></select>
+      </div>
+      <div id="lib-tagfilter" class="lib-tagfilter"></div>
+      <div id="card-grid" class="card-grid"></div>
+      <div id="lib-empty" class="empty-state" hidden></div>
+    </section>
+
+    <!-- ============ 会议详情 ============ -->
+    <section id="meeting-view" hidden>
+      <button id="btn-back" class="btn btn-ghost btn-sm" style="margin-bottom:14px">← 返回录音库</button>
+
       <!-- 顶部 -->
       <section class="card">
         <div class="detail-header">
-          <h2 id="m-title" class="detail-title"></h2>
+          <h2 id="m-title" class="detail-title" title="双击改标题"></h2>
           <span id="m-status" class="badge"></span>
         </div>
         <div class="actions">
@@ -81,6 +53,7 @@
           <button id="btn-regen" class="btn btn-secondary btn-sm">重新生成</button>
           <a id="btn-export-md" class="btn btn-ghost btn-sm" target="_blank">导出 MD</a>
           <a id="btn-export-docx" class="btn btn-ghost btn-sm" target="_blank">导出 Word</a>
+          <button id="btn-edit-meta" class="btn btn-ghost btn-sm">编辑信息</button>
           <button id="btn-delete" class="btn btn-danger-ghost btn-sm">删除</button>
         </div>
       </section>
@@ -120,11 +93,56 @@
           <div id="todos-body"></div>
         </section>
       </div>
-    </div>
+    </section>
   </main>
 </div>
 
-<!-- 热词管理弹窗 -->
+<!-- ============ 上传弹窗 ============ -->
+<div id="upload-modal" class="modal-mask" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">上传录音</div>
+      <button id="upload-close" class="modal-close" title="关闭">×</button>
+    </div>
+    <form id="upload-form">
+      <label class="file-drop" id="file-label">
+        <input type="file" id="file" accept="audio/*,video/*" multiple hidden required>
+        <span class="file-icon">⬆️</span>
+        <span class="file-hint" id="file-name">点击选择音频 / 视频文件（可多选）</span>
+      </label>
+      <select id="template" class="field" style="margin-top:12px"></select>
+      <button type="submit" id="upload-btn" class="btn btn-primary btn-block" style="margin-top:12px">上传并处理</button>
+      <div id="upload-msg" class="hint"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ 处理队列弹窗 ============ -->
+<div id="queue-modal" class="modal-mask" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">处理队列 <span class="card-title-sub">串行处理，一次转一条</span></div>
+      <button id="queue-close" class="modal-close" title="关闭">×</button>
+    </div>
+    <div id="queue-list" class="queue-list"></div>
+  </div>
+</div>
+
+<!-- ============ 声纹库弹窗 ============ -->
+<div id="voiceprint-modal" class="modal-mask" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">声纹库 <span class="card-title-sub">自动识别说话人</span></div>
+      <button id="vp-close" class="modal-close" title="关闭">×</button>
+    </div>
+    <div class="modal-sub">
+      在会议详情里给说话人填名字后点「存声纹」，以后新上传的会议会自动识别。一个人可保存多份模板（不同设备/来源）。
+    </div>
+    <div id="voiceprint-list" class="tags"></div>
+  </div>
+</div>
+
+<!-- ============ 热词管理弹窗 ============ -->
 <div id="hotword-modal" class="modal-mask" hidden>
   <div class="modal">
     <div class="modal-header">
@@ -155,6 +173,42 @@
       <div style="flex:1"></div>
       <button id="hw-cancel" class="btn btn-secondary btn-sm">取消</button>
       <button id="hw-save" class="btn btn-primary btn-sm">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 录音信息编辑抽屉 ============ -->
+<div id="meta-drawer" class="drawer-mask" hidden>
+  <div class="drawer">
+    <div class="drawer-header">
+      <div class="drawer-title">编辑录音信息</div>
+      <button id="meta-close" class="modal-close" title="关闭">×</button>
+    </div>
+    <div class="drawer-body">
+      <label class="edit-label">标题</label>
+      <input type="text" id="meta-title" class="field">
+
+      <label class="edit-label">分类</label>
+      <input type="text" id="meta-category" class="field" list="category-options" placeholder="选择或输入新分类（单选）">
+      <datalist id="category-options"></datalist>
+
+      <label class="edit-label">音频时间</label>
+      <input type="text" id="meta-audio-time" class="field" placeholder="如 2026-06-22">
+
+      <label class="edit-label">标签</label>
+      <div id="meta-tags" class="chip-box"></div>
+      <input type="text" id="meta-tag-input" class="field" list="tag-options" placeholder="输入标签，回车添加">
+      <datalist id="tag-options"></datalist>
+
+      <label class="edit-label">人员 <span class="card-title-sub">由声纹识别，不可手动改</span></label>
+      <div id="meta-people-view" class="meta-readonly"></div>
+
+      <label class="edit-label">描述</label>
+      <textarea id="meta-desc" class="edit-ta" placeholder="简单描述这场录音的背景 / 要点…"></textarea>
+    </div>
+    <div class="drawer-footer">
+      <button id="meta-cancel" class="btn btn-secondary btn-sm">取消</button>
+      <button id="meta-save" class="btn btn-primary btn-sm">保存</button>
     </div>
   </div>
 </div>

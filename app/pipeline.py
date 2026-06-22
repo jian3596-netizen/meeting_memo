@@ -6,6 +6,8 @@ uploaded → processing_audio → transcribing → cleaning_text → summarizing
 
 from __future__ import annotations
 
+import queue
+import threading
 import traceback
 from pathlib import Path
 from typing import List, Optional
@@ -17,6 +19,51 @@ from .asr import cosine, get_asr
 from .llm import get_llm
 from .models import MeetingSummary, Segment
 from .textproc import apply_speaker_map, clean_segments, format_ts
+
+
+# ----------------------------------------------------------------------------
+# 串行处理队列：同一时刻只转一条，其余停在 "uploaded"（已上传，排队中）。
+# 原因：FunASR 模型是进程内单例且无锁，CPU-only 并发既不安全也不会更快。
+# ----------------------------------------------------------------------------
+_task_queue: "queue.Queue[str]" = queue.Queue()
+_worker_started = False
+_worker_lock = threading.Lock()
+
+# 非终态（崩溃/重启后需要重新入队继续处理）
+PENDING_STATES = {"uploaded", "processing_audio", "transcribing", "cleaning_text", "summarizing"}
+
+
+def _worker_loop() -> None:
+    while True:
+        mid = _task_queue.get()
+        try:
+            process_meeting(mid)
+        except Exception:  # noqa: BLE001 单条失败不应让工作线程退出
+            traceback.print_exc()
+        finally:
+            _task_queue.task_done()
+
+
+def start_worker() -> None:
+    """启动唯一的后台处理线程（幂等）。"""
+    global _worker_started
+    with _worker_lock:
+        if _worker_started:
+            return
+        threading.Thread(target=_worker_loop, daemon=True).start()
+        _worker_started = True
+
+
+def enqueue_meeting(mid: str) -> None:
+    """把会议放入处理队列（FIFO，串行消费）。"""
+    _task_queue.put(mid)
+
+
+def requeue_pending() -> None:
+    """重启后把所有未完成的会议重新排队，继续处理。"""
+    for m in db.list_meetings():
+        if m.get("status") in PENDING_STATES:
+            enqueue_meeting(m["id"])
 
 
 def _auto_match_speakers(mid: str, wav: Path, segments: List[Segment]) -> None:

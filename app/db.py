@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS meetings (
     error_message TEXT,
     retry_count INTEGER DEFAULT 0,
     speaker_map TEXT DEFAULT '{}',
+    category TEXT DEFAULT '',
+    tags TEXT DEFAULT '[]',
+    participants TEXT DEFAULT '[]',
+    description TEXT DEFAULT '',
+    audio_time TEXT DEFAULT '',
     created_at TEXT,
     updated_at TEXT
 );
@@ -111,7 +116,24 @@ def init_db() -> None:
     with closing(get_conn()) as conn:
         _migrate_voiceprints(conn)
         conn.executescript(SCHEMA)
+        _migrate_meetings_meta(conn)
         conn.commit()
+
+
+def _migrate_meetings_meta(conn: sqlite3.Connection) -> None:
+    """给旧库的 meetings 表补上录音管理用的元数据列（分类/标签/人员/描述）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(meetings)").fetchall()}
+    add = {
+        "category": "TEXT DEFAULT ''",
+        "tags": "TEXT DEFAULT '[]'",
+        "participants": "TEXT DEFAULT '[]'",
+        "description": "TEXT DEFAULT ''",
+        "audio_time": "TEXT DEFAULT ''",
+    }
+    for col, ddl in add.items():
+        if col not in cols:
+            conn.execute(f"ALTER TABLE meetings ADD COLUMN {col} {ddl}")
+    conn.commit()
 
 
 def _migrate_voiceprints(conn: sqlite3.Connection) -> None:

@@ -91,3 +91,13 @@ class HotwordsRequest(BaseModel):
 class VoiceprintEnrollRequest(BaseModel):
     speaker: str               # 原始说话人标签，如 SPEAKER_00
     name: str                  # 真实姓名 / 角色
+
+
+class MeetingMetaRequest(BaseModel):
+    """录音管理元数据（部分字段，None 表示不改）。"""
+    title: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    participants: Optional[List[str]] = None
+    description: Optional[str] = None
+    audio_time: Optional[str] = None
