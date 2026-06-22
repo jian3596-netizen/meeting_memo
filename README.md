@@ -7,33 +7,31 @@
 
 - **后端**：FastAPI + SQLite（stdlib sqlite3）+ 后台线程异步处理
 - **音频**：imageio-ffmpeg 自带 ffmpeg（无需系统安装），统一转 16kHz 单声道 wav（视频自动抽音轨）
-- **ASR + 说话人分轨**：**本地 FunASR**（Paraformer + fsmn-vad + ct-punc + cam++），离线、音频不出本机
-- **LLM 纪要**：云 **通义千问 qwen-plus**（DashScope OpenAI 兼容端点），JSON 强约束 + source_time 防幻觉
+- **ASR + 说话人分轨**：**本地 FunASR**（Paraformer + fsmn-vad + ct-punc + cam++），离线、音频不出本机；**GPU 自动启用，无 GPU 回落 CPU**
+- **LLM 纪要**：**OpenAI 兼容端点**（URL + Key + 模型名由 .env 配置，默认 DeepSeek），JSON 强约束 + source_time 防幻觉
 - **前端**：单页原生 HTML/JS（无构建步骤）
 - **导出**：Markdown / Word（docx）
 
-> 说明：音频完全在本机转写；但**转写后的文本**会发往通义千问做总结。要全本地可后续换本地 LLM（Ollama 等）。
+> 说明：音频完全在本机转写；但**转写后的文本**会发往你配置的总结 LLM（默认 DeepSeek）。要全本地可把 `LLM_BASE_URL` 指向本地 LLM（Ollama 等 OpenAI 兼容服务）。
 
 ## 快速开始
 
-1. 根目录 `.env`（已含示例）：
+1. 根目录 `.env`（从 `.env.example` 复制；总结 LLM 的 URL/Key 必填）：
    ```env
-   DASHSCOPE_API_KEY=sk-xxxx     # 仅 LLM 总结需要
-   ASR_PROVIDER=funasr           # funasr(本地) | dashscope(云) | fake(假数据)
-   LLM_PROVIDER=dashscope        # dashscope | fake
-   LLM_MODEL=qwen-plus
-   FUNASR_SPK_NUM=3              # 预设说话人数：留空=自动估计(长音频可能塌缩成1人)，填数字更稳
+   LLM_BASE_URL=https://api.deepseek.com/v1   # OpenAI 兼容端点，可换任意兼容服务
+   LLM_API_KEY=sk-xxxx                        # 对应服务的 API Key
+   LLM_MODEL=deepseek-v4-pro                  # 模型名（按服务实际可用模型填）
+   FUNASR_DEVICE=auto                         # auto=有 GPU 自动用 GPU，否则 CPU；也可写死 cpu/cuda
+   FUNASR_SPK_NUM=3                           # 预设说话人数：留空=自动估计，填数字更稳
    ```
-2. 安装依赖并启动：
+2. 安装依赖并启动（torch / torchaudio 已在依赖里，`uv sync` 一并装好）：
    ```bash
    uv sync
-   uv add torch                 # funasr 不会自动装 torch，需单独装（Windows 默认 CPU 轮子）
    uv run python main.py
    ```
 3. 浏览器打开 http://127.0.0.1:8000 ，上传音频。
 
-> 首次用 funasr 会从 ModelScope 自动下载模型（~1.3GB）。
-> 想先不下模型直接看界面/流程：把 `.env` 两个 PROVIDER 改成 `fake`。
+> 首次转写会从 ModelScope 自动下载模型（~1.3GB），之后缓存复用、可离线转写。
 
 ## Docker 部署
 
@@ -45,7 +43,7 @@
 ### 1. 准备 .env
 
 ```bash
-cp .env.example .env        # 然后填入 DASHSCOPE_API_KEY（仅 LLM 总结用）
+cp .env.example .env        # 然后填入 LLM_BASE_URL / LLM_API_KEY（总结用）
 ```
 
 ### 2. docker compose（推荐）
@@ -94,13 +92,13 @@ docker compose run --rm meeting-memo \
 ```bash
 docker save meeting-memo:latest | gzip > meeting-memo.tar.gz   # 有网机：导出
 docker load < meeting-memo.tar.gz                              # 目标机：导入
-# 再把 ./models 目录拷过去挂载即用（总结仍需能访问通义千问，否则改本地 LLM）
+# 再把 ./models 目录拷过去挂载即用（总结仍需能访问你配置的 LLM 端点，否则改本地 LLM）
 ```
 
 ### 常见问题
 
 - **首场会议一直“转写中”**：多半在下模型，`docker compose logs -f` 看进度，下完即恢复。
-- **总结失败**：检查 `.env` 的 `DASHSCOPE_API_KEY`（总结走云端 qwen，需联网）。要全离线改 `LLM_PROVIDER=fake` 或换本地 LLM。
+- **总结失败**：检查 `.env` 的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（总结走你配置的 OpenAI 兼容端点，需联网）。要全离线可把 `LLM_BASE_URL` 指向本地 LLM（Ollama 等）。
 - **构建报 torch 版本找不到**：把 Dockerfile 里 `torch==2.12.0 torchaudio==2.11.0` 的精确版本去掉，让 CPU 源自动选。
 - **想用 GPU**：当前是 CPU 镜像；需换 CUDA 基础镜像 + GPU 版 torch，并以 `--gpus all` 运行。
 
@@ -135,7 +133,7 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 - **注册**：在某会议详情里给说话人填好真实姓名 → 点该行「存声纹」。系统聚合该说话人在本场的多段语音成一个声纹中心存库；同名再注册会按样本数加权增强。
 - **自动识别**：新会议转写后，每个 `SPEAKER_xx` 算声纹中心与声纹库逐一比对，余弦相似度超阈值且 Top1 明显高于 Top2 才认；**认不出就保留 `SPEAKER_xx` 等你手动命名**，且**不会覆盖你已手动改的名字**。
 - **实测**（真实 3 人录音）：同人余弦均值 ≈ 0.52、异人 ≈ 0.30，注册→识别准确率 ≈ 95%。单句会有重叠，所以采用「多段聚合 + 保守阈值 + 不确定不认」策略。
-- **仅 `ASR_PROVIDER=funasr` 支持**（复用本地 cam++ 模型，不额外加载）。
+- 复用本地 cam++ 模型抽声纹，不额外加载模型。
 - 可调参数（`.env`）：`VOICEPRINT_THRESHOLD`（默认 0.50）、`VOICEPRINT_MARGIN`（默认 0.06）、`VOICEPRINT_MAX_SEG`（默认 20）、`VOICEPRINT_ENABLED`（默认开）。
 
 ## 已知限制
@@ -148,7 +146,6 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 
 ## 自测脚本
 
-- `tests/smoke_fake.py`：fake provider 端到端跑通（无需 key/网络/模型）
 - `tests/check_funasr_real.py`：真实录音前 N 秒本地 FunASR 验证（`TEST_MAX_SEC` 控制秒数）
 - `tests/check_diar.py`：对比自动估计 vs 预设说话人数
 - `tests/check_voiceprint.py`：声纹可行性实验（同人/异人相似度分布 + 识别准确率，`VP_CLIP_SEC` 控制时长）

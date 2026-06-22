@@ -173,7 +173,7 @@ def enroll_voiceprint(mid: str, req: VoiceprintEnrollRequest) -> Dict:
     from .asr import cosine, get_asr, merge_centroids
     asr = get_asr()
     if not hasattr(asr, "embed_spans"):
-        raise HTTPException(status_code=400, detail="当前 ASR 不支持声纹（需 ASR_PROVIDER=funasr）")
+        raise HTTPException(status_code=400, detail="当前 ASR 不支持声纹提取")
 
     wav = m.get("processed_path")
     if not wav or not Path(wav).exists():

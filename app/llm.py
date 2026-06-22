@@ -1,9 +1,8 @@
 """LLM 结构化纪要生成（PRD 第 4 节）。
 
-通义千问走 OpenAI 兼容端点。短转写单次抽取；长转写 map-reduce（分段提炼→合并）。
+总结 LLM 走 OpenAI 兼容端点：URL + API Key + 模型名均由 .env 提供（默认 DeepSeek）。
+短转写单次抽取；长转写 map-reduce（分段提炼→合并）。
 输出用 MeetingSummary 校验，解析失败重试一次。
-
-Fake provider：从转写里取标题，产出一份可展示的结构化纪要，便于无 key 跑通。
 """
 
 from __future__ import annotations
@@ -32,14 +31,18 @@ def _extract_json(text: str) -> dict:
         raise
 
 
-class QwenLLM:
+class OpenAICompatLLM:
+    """OpenAI 兼容端点（DeepSeek / 通义 / 任意兼容服务），由 .env 指定 URL + Key + 模型。"""
+
     def __init__(self) -> None:
-        if not config.DASHSCOPE_API_KEY:
-            raise RuntimeError("缺少 DASHSCOPE_API_KEY，无法调用通义千问")
+        if not config.LLM_API_KEY:
+            raise RuntimeError(
+                "缺少 LLM_API_KEY，无法调用总结 LLM（请在 .env 配置 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL）"
+            )
         from openai import OpenAI
         self._client = OpenAI(
-            api_key=config.DASHSCOPE_API_KEY,
-            base_url=config.DASHSCOPE_LLM_BASE_URL,
+            api_key=config.LLM_API_KEY,
+            base_url=config.LLM_BASE_URL,
         )
 
     def _chat(self, messages: List[dict], json_mode: bool = True) -> str:
@@ -89,26 +92,6 @@ class QwenLLM:
         )
 
 
-class FakeLLM:
-    def summarize(
-        self, segments: List[Segment], cat_name: str, cat_focus: str,
-        custom_instruction: Optional[str] = None,
-    ) -> MeetingSummary:
-        first = segments[0].text if segments else "会议"
-        title = (first[:18] + "…") if len(first) > 18 else first
-        return MeetingSummary(
-            title=f"[{cat_name or '通用会议'}] {title}",
-            summary="（示例纪要）本次会议讨论了前后端接口设计，倾向先固定通讯格式再并行实现，"
-                    "并就本地 ASR 部署位置留有未决问题。",
-            topics=[{"title": "前后端接口设计", "summary": "倾向先固定 API 再并行实现。", "source_time": "00:00:28"}],
-            decisions=[{"content": "先定义统一 API v0.1，再实现本地/云/多 Agent 后端。", "source_time": "00:00:28"}],
-            todos=[{"owner": "未明确", "task": "整理前后端接口 v0.1 草案并发群", "deadline": "本周五", "source_time": "00:00:39"}],
-            risks=[{"content": "接口过早固定可能限制后续多 Agent 扩展。", "source_time": "00:00:19"}],
-            open_questions=[{"content": "本地 ASR 部署在板子还是先用云端？", "source_time": "00:00:48"}],
-        )
-
-
 def get_llm():
-    if config.llm_is_fake():
-        return FakeLLM()
-    return QwenLLM()
+    """总结 LLM 始终走 OpenAI 兼容端点（配置见 .env）。"""
+    return OpenAICompatLLM()
