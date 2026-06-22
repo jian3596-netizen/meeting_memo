@@ -73,6 +73,25 @@ body { margin: 0; padding: 0; overflow: hidden; }
   padding: 18px 16px; overflow-y: auto;
 }
 .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 0 4px; }
+.icon-btn {
+  margin-left: auto; flex: none; width: 28px; height: 28px; border-radius: var(--r-md);
+  border: 1px solid var(--color-border); background: #fff; cursor: pointer;
+  color: var(--color-text-secondary); font-size: 16px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; transition: all var(--t-fast);
+}
+.icon-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+
+/* 侧栏收起 / 展开 */
+.app-shell.sidebar-collapsed .sidebar { display: none; }
+.app-shell.sidebar-collapsed .main-panel { padding-left: 60px; }
+.sidebar-expand {
+  position: fixed; top: 14px; left: 14px; z-index: 50;
+  width: 36px; height: 36px; border-radius: var(--r-md);
+  border: 1px solid var(--color-border); background: #fff; box-shadow: var(--sh-card);
+  cursor: pointer; font-size: 18px; color: var(--color-text-secondary);
+  display: flex; align-items: center; justify-content: center; transition: all var(--t-fast);
+}
+.sidebar-expand:hover { border-color: var(--color-primary); color: var(--color-primary); }
 .brand-logo {
   width: 40px; height: 40px; border-radius: var(--r-lg);
   background: linear-gradient(135deg, #1677ff, #0d51cc);

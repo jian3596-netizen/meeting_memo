@@ -608,6 +608,16 @@ el("#m-title").addEventListener("dblclick", () => {
   });
 });
 
+// ---------- 侧栏收起 / 展开 ----------
+function setSidebar(collapsed) {
+  el("#app").classList.toggle("sidebar-collapsed", collapsed);
+  el("#sidebar-expand").hidden = !collapsed;
+  try { localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0"); } catch (e) {}
+}
+el("#sidebar-collapse").addEventListener("click", () => setSidebar(true));
+el("#sidebar-expand").addEventListener("click", () => setSidebar(false));
+setSidebar((() => { try { return localStorage.getItem("sidebarCollapsed") === "1"; } catch (e) { return false; } })());
+
 // ---------- init ----------
 loadHotwords();
 loadVoiceprints();
