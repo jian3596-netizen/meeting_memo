@@ -44,6 +44,9 @@ FUNASR_PUNC_MODEL = os.getenv("FUNASR_PUNC_MODEL", "ct-punc").strip()
 FUNASR_SPK_MODEL = os.getenv("FUNASR_SPK_MODEL", "cam++").strip()  # 说话人分轨
 # 预设说话人数：留空=自动估计（长音频可能塌缩成 1 人）；填正整数=强制聚类成该人数，更稳
 FUNASR_SPK_NUM = os.getenv("FUNASR_SPK_NUM", "").strip()
+# 模型空闲自动卸载（秒）：空闲超过该值且队列为空时卸载 FunASR 模型，释放内存(~3GB)；
+# 下次转写或点「初始化」会自动重新加载。设 0 = 常驻不卸载。
+MODEL_IDLE_TIMEOUT = int(os.getenv("MODEL_IDLE_TIMEOUT", "900"))
 
 
 def funasr_spk_num() -> "int | None":

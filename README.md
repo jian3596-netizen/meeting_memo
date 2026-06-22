@@ -106,6 +106,7 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 
 - FunASR RTF ≈ 0.33x（40 分钟音频 ≈ 13 分钟 CPU 推理）
 - 模型每进程首次加载 ≈ 140s，之后进程内复用
+- 模型常驻内存约 3–4GB；默认空闲 15 分钟自动卸载释放（`MODEL_IDLE_TIMEOUT`，下次用自动重载），`0` 则常驻
 
 ## API（PRD 第 7 节）
 

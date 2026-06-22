@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import List, Optional
@@ -15,7 +16,7 @@ from typing import List, Optional
 from collections import defaultdict
 
 from . import audio, config, db, export
-from .asr import cosine, get_asr
+from .asr import FunASRLocal, cosine, get_asr, unload_model
 from .llm import get_llm
 from .models import MeetingSummary, Segment
 from .textproc import apply_speaker_map, clean_segments, format_ts
@@ -28,29 +29,55 @@ from .textproc import apply_speaker_map, clean_segments, format_ts
 _task_queue: "queue.Queue[str]" = queue.Queue()
 _worker_started = False
 _worker_lock = threading.Lock()
+_busy = False   # worker 是否正在处理一条会议（空闲卸载据此避免卸载在用的模型）
 
 # 非终态（崩溃/重启后需要重新入队继续处理）
 PENDING_STATES = {"uploaded", "processing_audio", "transcribing", "cleaning_text", "summarizing"}
 
 
 def _worker_loop() -> None:
+    global _busy
     while True:
         mid = _task_queue.get()
+        _busy = True
         try:
             process_meeting(mid)
         except Exception:  # noqa: BLE001 单条失败不应让工作线程退出
             traceback.print_exc()
         finally:
+            _busy = False
             _task_queue.task_done()
 
 
+def _idle_unload_loop() -> None:
+    """空闲超时后卸载 FunASR 模型释放内存（~3GB）。正在处理或队列有活时不卸载。
+
+    下次上传/转写或点「初始化」会自动重新加载（模型已缓存，不再下载，只是重新载入内存）。
+    """
+    timeout = config.MODEL_IDLE_TIMEOUT
+    check_every = min(60, max(5, timeout))
+    while True:
+        time.sleep(check_every)
+        try:
+            if _busy or not _task_queue.empty():
+                continue
+            if FunASRLocal._model is None:
+                continue
+            if time.monotonic() - (FunASRLocal._last_used or 0.0) >= timeout:
+                unload_model()
+        except Exception:  # noqa: BLE001 监控线程不因偶发异常退出
+            traceback.print_exc()
+
+
 def start_worker() -> None:
-    """启动唯一的后台处理线程（幂等）。"""
+    """启动后台处理线程 +（可选）空闲卸载线程（幂等）。"""
     global _worker_started
     with _worker_lock:
         if _worker_started:
             return
         threading.Thread(target=_worker_loop, daemon=True).start()
+        if config.MODEL_IDLE_TIMEOUT > 0:
+            threading.Thread(target=_idle_unload_loop, daemon=True).start()
         _worker_started = True
 
 

@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import gc
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any, List, Optional
@@ -51,6 +53,7 @@ class FunASRLocal:
 
     _model = None     # 进程内复用，避免每次重载
     _device = None    # 与 _model 对应的设备（cuda / cuda:0 / cpu）
+    _last_used = 0.0  # 最近一次使用的 time.monotonic()，给空闲卸载判断用
     _lock = threading.Lock()  # 串行化模型构建：处理线程与「初始化」预热并发时也只加载一次
 
     def __init__(self) -> None:
@@ -71,6 +74,7 @@ class FunASRLocal:
                     print(f"[funasr] 模型已加载，device={device}", flush=True)
         self.model = FunASRLocal._model
         self.device = FunASRLocal._device
+        FunASRLocal._last_used = time.monotonic()
 
     def transcribe(self, wav: Path, duration_sec: float, hotword: str = "", spk_num: "int | None" = None) -> List[Segment]:
         kw = {"batch_size_s": 300}
@@ -99,6 +103,7 @@ class FunASRLocal:
                 text=text, raw_text=text,
             ))
             idx += 1
+        FunASRLocal._last_used = time.monotonic()
         return segments
 
     def embed_spans(self, wav: Path, spans, max_segments: Optional[int] = None,
@@ -184,6 +189,35 @@ def trigger_warmup() -> dict:
             _warmup_status, _warmup_message = "loading", "正在加载/下载模型…"
             threading.Thread(target=_warmup_run, daemon=True).start()
     return warmup_state()
+
+
+def _malloc_trim() -> None:
+    """Linux glibc：把空闲堆内存还给 OS，让 RSS 真正下降；非 glibc 平台静默跳过。"""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def unload_model() -> bool:
+    """卸载常驻的 FunASR 模型，释放内存（~3GB）。返回是否真的卸载了。
+
+    与构建共用 _lock，确保不会和正在进行的加载/转写抢同一份模型；
+    卸载后预热状态归零，前端会重新显示「初始化模型」。
+    """
+    with FunASRLocal._lock:
+        if FunASRLocal._model is None:
+            return False
+        FunASRLocal._model = None
+        FunASRLocal._device = None
+    global _warmup_status, _warmup_message
+    with _warmup_lock:
+        _warmup_status, _warmup_message = "idle", ""
+    gc.collect()
+    _malloc_trim()
+    print("[funasr] 模型已卸载（空闲释放内存）", flush=True)
+    return True
 
 
 def get_asr():
