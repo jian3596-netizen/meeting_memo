@@ -34,6 +34,21 @@ TEMPLATES: Dict[str, Dict[str, str]] = {
             "争议点放 open_questions，验证项放 todos。"
         ),
     },
+    "daily": {
+        "name": "日常记录",
+        "focus": (
+            "关注：按时间顺序如实记录谈了什么、提到的信息和结论。"
+            "不必强行归纳决策/待办，只有明确提到要做的事才放进 todos；"
+            "summary 用平实口吻概括整段内容。"
+        ),
+    },
+    "regular": {
+        "name": "例会",
+        "focus": (
+            "关注：各人/各条线的进展同步、上次待办的完成情况、本期新待办、遇到的阻塞、"
+            "需要协调或下次跟进的事项。todos 要尽量明确 owner 和 deadline，阻塞放 risks。"
+        ),
+    },
 }
 
 
