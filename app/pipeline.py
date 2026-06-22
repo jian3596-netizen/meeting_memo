@@ -94,6 +94,44 @@ def load_segments(mid: str) -> List[Segment]:
     return segs
 
 
+def rename_in_summary(mid: str, replacements: dict) -> None:
+    """说话人改名后，把已生成的纪要 / 待办里出现的旧名替换为新名。
+
+    replacements: {旧名(原始 SPEAKER_xx 或上一轮的显示名): 新名}。
+    覆盖标题、摘要、讨论点、决策、待办负责人/事项、风险、未决问题，并重写 markdown。
+    """
+    replacements = {o: n for o, n in (replacements or {}).items() if o and n and o != n}
+    if not replacements:
+        return
+    summary = load_summary(mid)
+    if not summary:
+        return
+
+    def rep(s: Optional[str]) -> Optional[str]:
+        if not s:
+            return s
+        for old, new in replacements.items():
+            s = s.replace(old, new)
+        return s
+
+    summary.title = rep(summary.title)
+    summary.summary = rep(summary.summary)
+    for t in summary.topics:
+        t.title, t.summary = rep(t.title), rep(t.summary)
+    for d in summary.decisions:
+        d.content = rep(d.content)
+    for td in summary.todos:
+        td.owner, td.task = rep(td.owner), rep(td.task)
+    for r in summary.risks:
+        r.content = rep(r.content)
+    for q in summary.open_questions:
+        q.content = rep(q.content)
+
+    segments = load_segments(mid)
+    _persist_summary(mid, summary, segments, config.LLM_MODEL)
+    db.update_meeting(mid, title=summary.title)
+
+
 def load_summary(mid: str) -> Optional[MeetingSummary]:
     row = db.get_summary_row(mid)
     if not row:

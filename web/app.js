@@ -7,6 +7,7 @@ let pollTimer = null;
 let templatesCache = null;
 let hotwords = [];
 let voiceprints = [];
+let currentSummary = null;
 
 const STATUS_LABEL = {
   uploaded: "已上传，排队中",
@@ -358,16 +359,16 @@ async function renderResults(id) {
   el("#audio-card").hidden = false;
   el("#audio").src = `/api/meetings/${id}/audio`;
 
-  const [tr, sum, tasks, meta] = await Promise.all([
+  const [tr, sum, meta] = await Promise.all([
     api(`/api/meetings/${id}/transcript`),
     api(`/api/meetings/${id}/summary`).catch(() => null),
-    api(`/api/meetings/${id}/tasks`).catch(() => ({ tasks: [] })),
     api(`/api/meetings/${id}`),
   ]);
+  currentSummary = sum;
   renderTranscript(tr.segments);
   renderSpeakerEdit(tr.segments, meta.speaker_map || {});
   renderSummary(sum);
-  renderTodos(tasks.tasks);
+  renderTodos(sum ? sum.todos : []);
 }
 
 function renderTranscript(segs) {
@@ -409,9 +410,16 @@ async function saveSpeakers() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(map),
     });
-    const tr = await api(`/api/meetings/${currentId}/transcript`);
+    const [tr, sum] = await Promise.all([
+      api(`/api/meetings/${currentId}/transcript`),
+      api(`/api/meetings/${currentId}/summary`).catch(() => null),
+    ]);
     renderTranscript(tr.segments);
     renderSpeakerEdit(tr.segments, map);
+    // 改名会同步替换纪要/待办里的旧名，刷新展示
+    currentSummary = sum;
+    renderSummary(sum);
+    renderTodos(sum ? sum.todos : []);
   } catch (e) {
     alert("保存失败：" + e.message);
     btn.disabled = false; btn.textContent = "保存改名";
@@ -427,35 +435,132 @@ function valOrUnset(v) {
   return (!v || v === "未明确") ? `<span class="unset">未明确</span>` : esc(v);
 }
 
+// ----- 双击行内编辑：通用工具 -----
+function getByPath(obj, path) {
+  return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
+}
+function setByPath(obj, path, val) {
+  const ks = path.split(".");
+  const last = ks.pop();
+  ks.reduce((o, k) => o[k], obj)[last] = val;
+}
+
+async function saveSummary() {
+  await api(`/api/meetings/${currentId}/summary`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(currentSummary),
+  });
+}
+
+/** 把元素临时替换为输入框；提交（回车/失焦）调用 onSave(新值)，Esc 取消。值未变则不保存。 */
+function inlineEdit(target, value, multiline, onSave) {
+  if (target.dataset.editing === "1") return;
+  target.dataset.editing = "1";
+  const original = target.innerHTML;
+  const restoreDisplay = target.style.display;
+  if (multiline && target.tagName === "SPAN") target.style.display = "block";
+  const field = document.createElement(multiline ? "textarea" : "input");
+  field.className = "inline-field";
+  field.value = value || "";
+  target.innerHTML = "";
+  target.appendChild(field);
+  field.focus();
+  field.select();
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return;
+    done = true;
+    target.dataset.editing = "0";
+    const nv = field.value.trim();
+    if (commit && nv !== (value || "").trim()) {
+      try { await onSave(nv); }
+      catch (e) { alert("保存失败：" + e.message); target.style.display = restoreDisplay; target.innerHTML = original; }
+    } else {
+      target.style.display = restoreDisplay;
+      target.innerHTML = original;
+    }
+  };
+  field.addEventListener("blur", () => finish(true));
+  field.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    else if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey)) { e.preventDefault(); field.blur(); }
+  });
+}
+
+/** 在容器上做事件委托：双击 .editable → 行内编辑 currentSummary 中 data-path 指向的字段。 */
+function bindInlineEditing(containerSel, rerender) {
+  el(containerSel).addEventListener("dblclick", (e) => {
+    const t = e.target.closest(".editable");
+    if (!t || !el(containerSel).contains(t) || t.dataset.editing === "1") return;
+    const path = t.dataset.path;
+    const multiline = t.dataset.multiline === "1";
+    const unset = t.dataset.unset === "1";
+    const cur = getByPath(currentSummary, path);
+    const prefill = (cur == null || cur === "未明确") ? "" : String(cur);
+    inlineEdit(t, prefill, multiline, async (nv) => {
+      setByPath(currentSummary, path, nv || (unset ? "未明确" : ""));
+      await saveSummary();
+      rerender();
+      if (path === "title") { el("#m-title").textContent = currentSummary.title; loadList(); }
+    });
+  });
+}
+
 function renderSummary(sum) {
   if (!sum) { el("#summary-body").innerHTML = `<div class="unset">纪要尚未生成</div>`; return; }
-  const blocks = [`<div class="sum-summary">${esc(sum.summary)}</div>`];
+  const ed = (path, html, ml) =>
+    `<span class="editable" data-path="${path}"${ml ? ' data-multiline="1"' : ""} title="双击编辑">${html}</span>`;
+  const srcEd = (path, ts) =>
+    `<span class="editable" data-path="${path}" data-unset="1" title="双击编辑出处时间">${srcTag(ts)}</span>`;
+  const blocks = [`<div class="sum-summary">${ed("summary", esc(sum.summary) || '<span class="unset">（双击添加摘要）</span>', true)}</div>`];
   if (sum.topics?.length) blocks.push(listBlock("关键讨论点",
-    sum.topics.map((t) => `<b>${esc(t.title)}</b>：${esc(t.summary)} ${srcTag(t.source_time)}`)));
+    sum.topics.map((t, i) => `${ed(`topics.${i}.title`, "<b>" + esc(t.title) + "</b>")}：${ed(`topics.${i}.summary`, esc(t.summary), true)} ${srcEd(`topics.${i}.source_time`, t.source_time)}`)));
   if (sum.decisions?.length) blocks.push(listBlock("已确认决策",
-    sum.decisions.map((d) => `${esc(d.content)} ${srcTag(d.source_time)}`)));
+    sum.decisions.map((d, i) => `${ed(`decisions.${i}.content`, esc(d.content), true)} ${srcEd(`decisions.${i}.source_time`, d.source_time)}`)));
   if (sum.risks?.length) blocks.push(listBlock("风险问题",
-    sum.risks.map((r) => `${esc(r.content)} ${srcTag(r.source_time)}`)));
+    sum.risks.map((r, i) => `${ed(`risks.${i}.content`, esc(r.content), true)} ${srcEd(`risks.${i}.source_time`, r.source_time)}`)));
   if (sum.open_questions?.length) blocks.push(listBlock("未决问题",
-    sum.open_questions.map((q) => `${esc(q.content)} ${srcTag(q.source_time)}`)));
+    sum.open_questions.map((q, i) => `${ed(`open_questions.${i}.content`, esc(q.content), true)} ${srcEd(`open_questions.${i}.source_time`, q.source_time)}`)));
   el("#summary-body").innerHTML = blocks.join("");
 }
 function listBlock(title, items) {
   return `<div class="sum-block"><h4>${title}</h4><ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul></div>`;
 }
 
-function renderTodos(tasks) {
-  if (!tasks?.length) { el("#todos-body").innerHTML = `<div class="unset">无待办事项</div>`; return; }
-  el("#todos-body").innerHTML = `
-    <table>
-      <thead><tr><th>负责人</th><th>事项</th><th>截止时间</th><th>出处</th></tr></thead>
-      <tbody>${tasks.map((t) => `<tr>
-        <td>${valOrUnset(t.owner)}</td>
-        <td>${esc(t.task)}</td>
-        <td>${valOrUnset(t.deadline)}</td>
-        <td>${srcTag(t.source_time)}</td>
-      </tr>`).join("")}</tbody>
-    </table>`;
+function renderTodos(todos) {
+  todos = todos || [];
+  const addBtn = `<button id="todo-add" class="btn btn-secondary btn-sm" style="margin-top:10px">+ 添加一行</button>`;
+  if (!todos.length) {
+    el("#todos-body").innerHTML = `<div class="unset" style="margin-bottom:6px">无待办事项</div>${addBtn}`;
+  } else {
+    const cell = (i, field, html, unset) =>
+      `<td class="editable" data-path="todos.${i}.${field}"${field === "task" ? ' data-multiline="1"' : ""}${unset ? ' data-unset="1"' : ""} title="双击编辑">${html}</td>`;
+    el("#todos-body").innerHTML = `
+      <table>
+        <thead><tr><th>负责人</th><th>事项</th><th>截止时间</th><th>出处</th><th></th></tr></thead>
+        <tbody>${todos.map((t, i) => `<tr data-i="${i}">
+          ${cell(i, "owner", valOrUnset(t.owner), true)}
+          ${cell(i, "task", esc(t.task) || '<span class="unset">（双击填写）</span>')}
+          ${cell(i, "deadline", valOrUnset(t.deadline), true)}
+          ${cell(i, "source_time", srcTag(t.source_time), true)}
+          <td><button class="row-del" title="删除该行">×</button></td>
+        </tr>`).join("")}</tbody>
+      </table>${addBtn}`;
+    el("#todos-body").querySelectorAll(".row-del").forEach((b) => b.addEventListener("click", async () => {
+      const i = +b.closest("tr").dataset.i;
+      if (!confirm("删除该行待办？")) return;
+      currentSummary.todos.splice(i, 1);
+      try { await saveSummary(); renderTodos(currentSummary.todos); }
+      catch (e) { alert("保存失败：" + e.message); }
+    }));
+  }
+  el("#todo-add").addEventListener("click", async () => {
+    if (!currentSummary) return;
+    currentSummary.todos = currentSummary.todos || [];
+    currentSummary.todos.push({ owner: "未明确", task: "", deadline: "未明确", source_time: "未明确" });
+    try { await saveSummary(); renderTodos(currentSummary.todos); }
+    catch (e) { alert("保存失败：" + e.message); }
+  });
 }
 
 // ---------- 重新生成 / 删除 ----------
@@ -488,6 +593,19 @@ el("#btn-delete").addEventListener("click", async () => {
   el("#meeting-view").hidden = true;
   el("#empty").hidden = false;
   loadList();
+});
+
+// ---------- 双击行内编辑（纪要 / 待办 / 标题） ----------
+bindInlineEditing("#summary-body", () => renderSummary(currentSummary));
+bindInlineEditing("#todos-body", () => renderTodos(currentSummary?.todos || []));
+el("#m-title").addEventListener("dblclick", () => {
+  if (!currentSummary) return;
+  inlineEdit(el("#m-title"), el("#m-title").textContent, false, async (nv) => {
+    currentSummary.title = nv || currentSummary.title;
+    await saveSummary();
+    el("#m-title").textContent = currentSummary.title;
+    loadList();
+  });
 });
 
 // ---------- init ----------

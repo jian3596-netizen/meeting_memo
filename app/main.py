@@ -263,7 +263,23 @@ def regenerate(mid: str, req: RegenerateRequest) -> CreateMeetingResponse:
 @app.post("/api/meetings/{mid}/speakers")
 def update_speakers(mid: str, mapping: Dict[str, str]) -> Dict:
     _require(mid)
+    prev = db.get_speaker_map(mid)
     db.set_speaker_map(mid, mapping)
+    # 改名后，把纪要/待办里的旧名（原始 SPEAKER_xx 或上一轮的显示名）替换为新名
+    replacements: Dict[str, str] = {}
+    for spk, name in mapping.items():
+        name = (name or "").strip()
+        if not name:
+            continue
+        old_disp = (prev.get(spk) or "").strip()
+        if old_disp and old_disp != name:
+            replacements[old_disp] = name
+        if spk != name:
+            replacements.setdefault(spk, name)
+    try:
+        pipeline.rename_in_summary(mid, replacements)
+    except Exception:  # noqa: BLE001 改名是辅助操作，纪要重写失败不应让改名整体失败
+        pass
     return {"ok": True, "speaker_map": mapping}
 
 

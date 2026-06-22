@@ -283,6 +283,25 @@ td:first-child, th:first-child { border-top-left-radius: var(--r-md); }
 .hw-bulk textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-light); }
 .modal-footer { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--color-border-light); }
 
+/* ===== 双击行内编辑 ===== */
+.editable { cursor: text; border-radius: var(--r-sm); transition: background var(--t-fast); }
+.editable:hover { background: var(--color-primary-lighter); box-shadow: inset 0 0 0 1px var(--color-border); }
+td.editable { cursor: text; }
+td.editable:hover { background: var(--color-primary-lighter); }
+.inline-field {
+  width: 100%; min-width: 80px; box-sizing: border-box; margin: 0; vertical-align: middle;
+  padding: 6px 9px; font: inherit; font-size: 13px; line-height: 1.5; outline: none;
+  border: 1px solid var(--color-primary); border-radius: var(--r-md);
+  box-shadow: 0 0 0 3px var(--color-primary-light); background: #fff;
+}
+textarea.inline-field { min-height: 60px; resize: vertical; line-height: 1.6; }
+.row-del {
+  border: none; background: transparent; color: var(--color-text-tertiary);
+  font-size: 18px; line-height: 1; cursor: pointer; padding: 0 6px; border-radius: var(--r-sm);
+}
+.row-del:hover { color: var(--color-danger); background: var(--color-danger-light); }
+td:last-child, th:last-child { width: 36px; text-align: center; }
+
 /* 滚动条 */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #d6dae0; border-radius: var(--r-full); }
