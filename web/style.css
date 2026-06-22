@@ -89,6 +89,11 @@ body { margin: 0; padding: 0; overflow: hidden; }
 .topnav-item.active { background: var(--color-primary-light); color: var(--color-primary-dark); font-weight: 600; }
 .topbar-actions { margin-left: auto; display: flex; gap: 8px; }
 
+/* 「初始化模型」按钮的状态色（用 id 选择器盖过 .btn:disabled 的半透明，保证状态清晰） */
+#btn-warmup.warmup-ready { background: var(--color-success-light); color: var(--color-success); border-color: var(--color-success-light); opacity: 1; }
+#btn-warmup.warmup-loading { background: var(--color-warning-light); color: var(--color-warning); border-color: var(--color-warning-light); opacity: 1; }
+#btn-warmup.warmup-failed { background: var(--color-danger-light); color: var(--color-danger); border-color: var(--color-danger-light); }
+
 /* ===== 内容区 ===== */
 .content { flex: 1; overflow-y: auto; padding: 20px 24px; }
 

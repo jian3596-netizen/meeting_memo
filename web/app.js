@@ -720,6 +720,61 @@ el("#btn-voiceprint-open").addEventListener("click", () => { el("#voiceprint-mod
 el("#vp-close").addEventListener("click", () => { el("#voiceprint-modal").hidden = true; });
 el("#voiceprint-modal").addEventListener("click", (e) => { if (e.target.id === "voiceprint-modal") el("#voiceprint-modal").hidden = true; });
 
+// ---------- 模型初始化（预热） ----------
+let warmupTimer = null;
+
+function renderWarmup(st) {
+  const btn = el("#btn-warmup");
+  if (!btn) return;
+  btn.classList.remove("warmup-ready", "warmup-loading", "warmup-failed");
+  if (st.loaded || st.status === "ready") {
+    btn.textContent = "模型就绪 ✓";
+    btn.classList.add("warmup-ready");
+    btn.disabled = true;
+    btn.title = `本地转写模型已加载（device=${st.device || "?"}），第一场会议可直接转写`;
+  } else if (st.status === "loading") {
+    btn.textContent = "模型加载中…";
+    btn.classList.add("warmup-loading");
+    btn.disabled = true;
+    btn.title = "正在下载/加载本地模型（首次约 1.3GB）；此时可照常上传，转写会排队等模型就绪";
+  } else if (st.status === "failed") {
+    btn.textContent = "初始化失败 ⟳";
+    btn.classList.add("warmup-failed");
+    btn.disabled = false;
+    btn.title = (st.message || "加载失败") + "（点击重试）";
+  } else {
+    btn.textContent = "初始化模型";
+    btn.disabled = false;
+    btn.title = "提前下载并加载本地转写模型，避免第一场会议才开始下载";
+  }
+}
+
+function warmupPolling(on) {
+  if (on && !warmupTimer) warmupTimer = setInterval(refreshWarmup, 3000);
+  else if (!on && warmupTimer) { clearInterval(warmupTimer); warmupTimer = null; }
+}
+
+async function refreshWarmup() {
+  try {
+    const st = await api("/api/warmup");
+    renderWarmup(st);
+    warmupPolling(st.status === "loading");
+  } catch (e) { /* 静默：初始化状态不影响主流程 */ }
+}
+
+async function startWarmup() {
+  el("#btn-warmup").disabled = true;
+  try {
+    const st = await api("/api/warmup", { method: "POST" });
+    renderWarmup(st);
+    warmupPolling(st.status === "loading");
+  } catch (e) {
+    alert("初始化失败：" + e.message);
+    refreshWarmup();
+  }
+}
+el("#btn-warmup").addEventListener("click", startWarmup);
+
 // ---------- 选择 / 轮询 ----------
 async function selectMeeting(id) {
   currentId = id;
@@ -1058,4 +1113,5 @@ document.addEventListener("keydown", (e) => {
 tagChips = makeChipEditor("#meta-tags", "#meta-tag-input");
 loadHotwords();
 loadVoiceprints();
+refreshWarmup();
 showLibrary();

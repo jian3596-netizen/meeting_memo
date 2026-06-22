@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import threading
+import traceback
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -49,21 +51,24 @@ class FunASRLocal:
 
     _model = None     # 进程内复用，避免每次重载
     _device = None    # 与 _model 对应的设备（cuda / cuda:0 / cpu）
+    _lock = threading.Lock()  # 串行化模型构建：处理线程与「初始化」预热并发时也只加载一次
 
     def __init__(self) -> None:
         from funasr import AutoModel
         if FunASRLocal._model is None:
-            device = config.funasr_device()
-            FunASRLocal._model = AutoModel(
-                model=config.FUNASR_ASR_MODEL,
-                vad_model=config.FUNASR_VAD_MODEL,
-                punc_model=config.FUNASR_PUNC_MODEL,
-                spk_model=config.FUNASR_SPK_MODEL,
-                device=device,            # cuda / cuda:0 / cpu，GPU 不可用时由 config 回落 cpu
-                disable_update=True,
-            )
-            FunASRLocal._device = device
-            print(f"[funasr] 模型已加载，device={device}", flush=True)
+            with FunASRLocal._lock:
+                if FunASRLocal._model is None:   # 双重检查：拿到锁后再确认一次
+                    device = config.funasr_device()
+                    FunASRLocal._model = AutoModel(
+                        model=config.FUNASR_ASR_MODEL,
+                        vad_model=config.FUNASR_VAD_MODEL,
+                        punc_model=config.FUNASR_PUNC_MODEL,
+                        spk_model=config.FUNASR_SPK_MODEL,
+                        device=device,            # cuda / cuda:0 / cpu，GPU 不可用时由 config 回落 cpu
+                        disable_update=True,
+                    )
+                    FunASRLocal._device = device
+                    print(f"[funasr] 模型已加载，device={device}", flush=True)
         self.model = FunASRLocal._model
         self.device = FunASRLocal._device
 
@@ -137,6 +142,48 @@ class FunASRLocal:
         c = np.mean(vecs, axis=0)
         c = c / (np.linalg.norm(c) + 1e-8)
         return [float(x) for x in c]
+
+
+# ---- 模型预热（让用户在第一场会议前先把模型下载/加载好）----
+_warmup_lock = threading.Lock()
+_warmup_status = "idle"     # idle | loading | ready | failed
+_warmup_message = ""
+
+
+def warmup_state() -> dict:
+    """当前模型预热状态。无论由谁触发，只要模型已在内存即视为 ready。"""
+    global _warmup_status
+    if FunASRLocal._model is not None and _warmup_status != "ready":
+        _warmup_status = "ready"
+    return {
+        "status": _warmup_status,
+        "message": _warmup_message,
+        "device": FunASRLocal._device,
+        "loaded": FunASRLocal._model is not None,
+    }
+
+
+def _warmup_run() -> None:
+    global _warmup_status, _warmup_message
+    try:
+        FunASRLocal()  # 构建即加载（线程安全，内部有锁）
+        _warmup_status, _warmup_message = "ready", ""
+        print("[warmup] 模型就绪", flush=True)
+    except Exception as e:  # noqa: BLE001 预热失败仅置状态；真正处理会议时还会再报一次
+        _warmup_status, _warmup_message = "failed", f"{type(e).__name__}: {e}"
+        traceback.print_exc()
+
+
+def trigger_warmup() -> dict:
+    """非阻塞触发模型预热（幂等）：起后台线程加载，前端轮询 warmup_state 即可。"""
+    global _warmup_status, _warmup_message
+    with _warmup_lock:
+        if FunASRLocal._model is not None:
+            _warmup_status = "ready"
+        elif _warmup_status != "loading":
+            _warmup_status, _warmup_message = "loading", "正在加载/下载模型…"
+            threading.Thread(target=_warmup_run, daemon=True).start()
+    return warmup_state()
 
 
 def get_asr():
