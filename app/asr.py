@@ -223,3 +223,77 @@ def unload_model() -> bool:
 def get_asr():
     """ASR 始终为本地 FunASR（离线、音频不出本机）。"""
     return FunASRLocal()
+
+
+# ---- 子进程隔离：每场会议在独立进程跑模型，跑完即退、内存全部还给 OS ----
+def _run_worker(req: dict) -> dict:
+    """启子进程 `python -m app.asr_worker` 处理一次请求；进程退出后内存被 OS 回收。"""
+    import json
+    import os
+    import subprocess
+    import sys
+    import tempfile
+
+    d = tempfile.mkdtemp(prefix="asrjob_")
+    reqp = os.path.join(d, "req.json")
+    outp = os.path.join(d, "out.json")
+    try:
+        with open(reqp, "w", encoding="utf-8") as f:
+            json.dump(req, f, ensure_ascii=False)
+        proc = subprocess.run(
+            [sys.executable, "-m", "app.asr_worker", reqp, outp],
+            capture_output=True, text=True,
+        )
+        if not os.path.exists(outp):
+            tail = (proc.stderr or proc.stdout or "")[-1000:]
+            raise RuntimeError(f"ASR 子进程失败 (code={proc.returncode}): {tail}")
+        with open(outp, encoding="utf-8") as f:
+            return json.load(f)
+    finally:
+        for p in (reqp, outp):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
+
+
+def transcribe_job(wav, duration: float, hotword: str = "", spk_num: Optional[int] = None,
+                   want_embeddings: bool = False):
+    """转写一场会议，返回 (segments, {speaker: 声纹中心})。
+
+    config.ASR_IN_SUBPROCESS=1（默认）走子进程；否则进程内常驻模型。
+    want_embeddings=True 时顺带在同一进程里抽各 SPEAKER 的声纹中心（供自动命名），避免再加载模型。
+    """
+    if config.ASR_IN_SUBPROCESS:
+        res = _run_worker({
+            "op": "transcribe", "wav": str(wav), "duration": duration,
+            "hotword": hotword, "spk_num": spk_num, "want_embeddings": want_embeddings,
+        })
+        segs = [Segment(**d) for d in res.get("segments", [])]
+        return segs, (res.get("embeddings") or {})
+
+    asr = FunASRLocal()
+    segs = asr.transcribe(Path(wav), duration, hotword=hotword, spk_num=spk_num)
+    emb = {}
+    if want_embeddings:
+        from collections import defaultdict
+        spans = defaultdict(list)
+        for s in segs:
+            spans[s.speaker].append((s.start_seconds, s.end_seconds))
+        for spk, sp in spans.items():
+            v = asr.embed_spans(Path(wav), sp)
+            if v is not None:
+                emb[spk] = v
+    return segs, emb
+
+
+def embed_job(wav, spans) -> Optional[List[float]]:
+    """对若干语音段抽声纹中心（存声纹时用）。子进程模式下独立进程跑，跑完即退。"""
+    if config.ASR_IN_SUBPROCESS:
+        res = _run_worker({"op": "embed", "wav": str(wav), "spans": [list(s) for s in spans]})
+        return res.get("embedding")
+    return FunASRLocal().embed_spans(Path(wav), spans)

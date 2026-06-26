@@ -48,6 +48,11 @@ FUNASR_SPK_NUM = os.getenv("FUNASR_SPK_NUM", "").strip()
 # 下次转写或点「初始化」会自动重新加载。设 0 = 常驻不卸载。
 MODEL_IDLE_TIMEOUT = int(os.getenv("MODEL_IDLE_TIMEOUT", "900"))
 
+# ASR 子进程隔离：=1（默认）每场会议在独立子进程里加载模型跑转写/声纹，跑完即退、
+# 内存(库+权重~3.5G)全部还给 OS；主服务常驻很小。代价是每场会多一次模型加载(~十几秒)。
+# =0 回到进程内常驻模型（配合上面的预热/空闲卸载）。
+ASR_IN_SUBPROCESS = os.getenv("ASR_IN_SUBPROCESS", "1").strip() not in ("0", "false", "False", "")
+
 
 def funasr_spk_num() -> "int | None":
     return int(FUNASR_SPK_NUM) if FUNASR_SPK_NUM.isdigit() else None

@@ -184,10 +184,7 @@ def enroll_voiceprint(mid: str, req: VoiceprintEnrollRequest) -> Dict:
     if not name:
         raise HTTPException(status_code=400, detail="姓名不能为空")
 
-    from .asr import cosine, get_asr, merge_centroids
-    asr = get_asr()
-    if not hasattr(asr, "embed_spans"):
-        raise HTTPException(status_code=400, detail="当前 ASR 不支持声纹提取")
+    from .asr import cosine, embed_job, merge_centroids
 
     wav = m.get("processed_path")
     if not wav or not Path(wav).exists():
@@ -201,7 +198,7 @@ def enroll_voiceprint(mid: str, req: VoiceprintEnrollRequest) -> Dict:
     if not spans:
         raise HTTPException(status_code=400, detail=f"该会议中没有 {req.speaker} 的语音")
 
-    emb = asr.embed_spans(wav, spans)
+    emb = embed_job(wav, spans)   # 子进程模式下独立进程抽声纹，跑完即退
     if emb is None:
         raise HTTPException(status_code=400, detail="提取声纹失败（该说话人有效语音太短）")
 

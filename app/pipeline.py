@@ -16,7 +16,7 @@ from typing import List, Optional
 from collections import defaultdict
 
 from . import audio, config, db, export
-from .asr import FunASRLocal, cosine, get_asr, unload_model
+from .asr import FunASRLocal, cosine, transcribe_job, unload_model
 from .llm import get_llm
 from .models import MeetingSummary, Segment
 from .textproc import apply_speaker_map, clean_segments, format_ts
@@ -93,17 +93,15 @@ def requeue_pending() -> None:
             enqueue_meeting(m["id"])
 
 
-def _auto_match_speakers(mid: str, wav: Path, segments: List[Segment]) -> None:
+def _auto_match_speakers(mid: str, spk_embeddings: dict) -> None:
     """分轨后按声纹自动给说话人命名（best-effort）。
 
-    - 仅 funasr（asr 具备 embed_spans）且已注册过声纹时生效。
-    - 每个 SPEAKER_xx 聚合声纹中心 → 与已注册者算余弦 → 超阈值且 Top1-Top2 差够大才认。
+    spk_embeddings: {SPEAKER_xx: 该说话人声纹中心向量}（由转写子进程顺带抽好）。
+    - 仅已注册过声纹时生效。
+    - 每个 SPEAKER_xx 与已注册者算余弦 → 超阈值且 Top1-Top2 差够大才认。
     - 不覆盖已有的手动改名；同一个名字不会同时分给两个说话人（高分优先）。
     """
-    if not config.VOICEPRINT_ENABLED:
-        return
-    asr = get_asr()
-    if not hasattr(asr, "embed_spans"):
+    if not config.VOICEPRINT_ENABLED or not spk_embeddings:
         return
     enrolled = db.get_voiceprints()
     if not enrolled:
@@ -113,13 +111,8 @@ def _auto_match_speakers(mid: str, wav: Path, segments: List[Segment]) -> None:
     for e in enrolled:
         templates[e["name"]].append(e["emb"])
 
-    spans = defaultdict(list)
-    for s in segments:
-        spans[s.speaker].append((s.start_seconds, s.end_seconds))
-
     candidates = []  # (score, speaker, name)
-    for spk, sp in spans.items():
-        centroid = asr.embed_spans(wav, sp)
+    for spk, centroid in spk_embeddings.items():
         if centroid is None:
             continue
         # 每个人取其所有模板中的最高余弦
@@ -233,12 +226,14 @@ def process_meeting(mid: str) -> None:
         processed, duration = audio.prepare(Path(meeting["audio_path"]), mid)
         db.update_meeting(mid, processed_path=str(processed), duration_sec=duration)
 
-        # 2. 转写 + 说话人分离
+        # 2. 转写 + 说话人分离（子进程，跑完即退还内存；已注册声纹时顺带抽各说话人声纹中心）
         step = "transcribing"
         db.set_status(mid, "transcribing", 40)
         hotword = " ".join(db.get_hotwords())
-        segments = get_asr().transcribe(
-            processed, duration, hotword=hotword, spk_num=(meeting.get("spk_num") or None)
+        want_emb = config.VOICEPRINT_ENABLED and bool(db.get_voiceprints())
+        segments, spk_embeddings = transcribe_job(
+            processed, duration, hotword=hotword,
+            spk_num=(meeting.get("spk_num") or None), want_embeddings=want_emb,
         )
         if not segments:
             raise RuntimeError("ASR 未返回任何文本（音频可能为空或无人声）")
@@ -251,7 +246,7 @@ def process_meeting(mid: str) -> None:
 
         # 3.5 声纹自动命名（best-effort，失败不影响主流程）
         try:
-            _auto_match_speakers(mid, processed, segments)
+            _auto_match_speakers(mid, spk_embeddings)
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
