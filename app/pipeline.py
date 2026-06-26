@@ -267,6 +267,16 @@ def process_meeting(mid: str) -> None:
 
         # 5. 完成
         db.set_status(mid, "completed", 100)
+
+        # 转写成功后删除原始上传文件（界面回放只用 processed），省空间。
+        # 仅在完成后删，失败的保留原文件以便重试/重排。
+        try:
+            orig = meeting.get("audio_path")
+            if orig and orig != str(processed) and Path(orig).exists():
+                Path(orig).unlink()
+                db.update_meeting(mid, audio_path="")
+        except Exception:  # noqa: BLE001 清理失败不应影响已完成的会议
+            traceback.print_exc()
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         db.mark_failed(mid, step, f"{type(e).__name__}: {e}")
