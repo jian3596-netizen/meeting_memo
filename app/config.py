@@ -44,14 +44,8 @@ FUNASR_PUNC_MODEL = os.getenv("FUNASR_PUNC_MODEL", "ct-punc").strip()
 FUNASR_SPK_MODEL = os.getenv("FUNASR_SPK_MODEL", "cam++").strip()  # 说话人分轨
 # 预设说话人数：留空=自动估计（长音频可能塌缩成 1 人）；填正整数=强制聚类成该人数，更稳
 FUNASR_SPK_NUM = os.getenv("FUNASR_SPK_NUM", "").strip()
-# 模型空闲自动卸载（秒）：空闲超过该值且队列为空时卸载 FunASR 模型，释放内存(~3GB)；
-# 下次转写或点「初始化」会自动重新加载。设 0 = 常驻不卸载。
-MODEL_IDLE_TIMEOUT = int(os.getenv("MODEL_IDLE_TIMEOUT", "900"))
-
-# ASR 子进程隔离：=1（默认）每场会议在独立子进程里加载模型跑转写/声纹，跑完即退、
-# 内存(库+权重~3.5G)全部还给 OS；主服务常驻很小。代价是每场会多一次模型加载(~十几秒)。
-# =0 回到进程内常驻模型（配合上面的预热/空闲卸载）。
-ASR_IN_SUBPROCESS = os.getenv("ASR_IN_SUBPROCESS", "1").strip() not in ("0", "false", "False", "")
+# 转写/抽声纹始终在独立子进程里跑（app/asr_worker.py），跑完即退、内存(库+权重~3.5G)
+# 全部还给 OS，主服务常驻很小。代价是每场会议多一次模型加载(~十几秒，从缓存不重下)。
 
 
 def funasr_spk_num() -> "int | None":

@@ -7,10 +7,6 @@
 
 from __future__ import annotations
 
-import gc
-import threading
-import time
-import traceback
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -51,30 +47,25 @@ class FunASRLocal:
     模型加载较重，进程内用类级缓存复用；设备（GPU/CPU）由 config.funasr_device() 决定。
     """
 
-    _model = None     # 进程内复用，避免每次重载
+    _model = None     # 进程内复用（子进程内一次加载，转写+抽声纹共用）
     _device = None    # 与 _model 对应的设备（cuda / cuda:0 / cpu）
-    _last_used = 0.0  # 最近一次使用的 time.monotonic()，给空闲卸载判断用
-    _lock = threading.Lock()  # 串行化模型构建：处理线程与「初始化」预热并发时也只加载一次
 
     def __init__(self) -> None:
         from funasr import AutoModel
         if FunASRLocal._model is None:
-            with FunASRLocal._lock:
-                if FunASRLocal._model is None:   # 双重检查：拿到锁后再确认一次
-                    device = config.funasr_device()
-                    FunASRLocal._model = AutoModel(
-                        model=config.FUNASR_ASR_MODEL,
-                        vad_model=config.FUNASR_VAD_MODEL,
-                        punc_model=config.FUNASR_PUNC_MODEL,
-                        spk_model=config.FUNASR_SPK_MODEL,
-                        device=device,            # cuda / cuda:0 / cpu，GPU 不可用时由 config 回落 cpu
-                        disable_update=True,
-                    )
-                    FunASRLocal._device = device
-                    print(f"[funasr] 模型已加载，device={device}", flush=True)
+            device = config.funasr_device()
+            FunASRLocal._model = AutoModel(
+                model=config.FUNASR_ASR_MODEL,
+                vad_model=config.FUNASR_VAD_MODEL,
+                punc_model=config.FUNASR_PUNC_MODEL,
+                spk_model=config.FUNASR_SPK_MODEL,
+                device=device,            # cuda / cuda:0 / cpu，GPU 不可用时由 config 回落 cpu
+                disable_update=True,
+            )
+            FunASRLocal._device = device
+            print(f"[funasr] 模型已加载，device={device}", flush=True)
         self.model = FunASRLocal._model
         self.device = FunASRLocal._device
-        FunASRLocal._last_used = time.monotonic()
 
     def transcribe(self, wav: Path, duration_sec: float, hotword: str = "", spk_num: "int | None" = None) -> List[Segment]:
         kw = {"batch_size_s": 300}
@@ -103,7 +94,6 @@ class FunASRLocal:
                 text=text, raw_text=text,
             ))
             idx += 1
-        FunASRLocal._last_used = time.monotonic()
         return segments
 
     def embed_spans(self, wav: Path, spans, max_segments: Optional[int] = None,
@@ -149,82 +139,6 @@ class FunASRLocal:
         return [float(x) for x in c]
 
 
-# ---- 模型预热（让用户在第一场会议前先把模型下载/加载好）----
-_warmup_lock = threading.Lock()
-_warmup_status = "idle"     # idle | loading | ready | failed
-_warmup_message = ""
-
-
-def warmup_state() -> dict:
-    """当前模型预热状态。无论由谁触发，只要模型已在内存即视为 ready。"""
-    global _warmup_status
-    if FunASRLocal._model is not None and _warmup_status != "ready":
-        _warmup_status = "ready"
-    return {
-        "status": _warmup_status,
-        "message": _warmup_message,
-        "device": FunASRLocal._device,
-        "loaded": FunASRLocal._model is not None,
-    }
-
-
-def _warmup_run() -> None:
-    global _warmup_status, _warmup_message
-    try:
-        FunASRLocal()  # 构建即加载（线程安全，内部有锁）
-        _warmup_status, _warmup_message = "ready", ""
-        print("[warmup] 模型就绪", flush=True)
-    except Exception as e:  # noqa: BLE001 预热失败仅置状态；真正处理会议时还会再报一次
-        _warmup_status, _warmup_message = "failed", f"{type(e).__name__}: {e}"
-        traceback.print_exc()
-
-
-def trigger_warmup() -> dict:
-    """非阻塞触发模型预热（幂等）：起后台线程加载，前端轮询 warmup_state 即可。"""
-    global _warmup_status, _warmup_message
-    with _warmup_lock:
-        if FunASRLocal._model is not None:
-            _warmup_status = "ready"
-        elif _warmup_status != "loading":
-            _warmup_status, _warmup_message = "loading", "正在加载/下载模型…"
-            threading.Thread(target=_warmup_run, daemon=True).start()
-    return warmup_state()
-
-
-def _malloc_trim() -> None:
-    """Linux glibc：把空闲堆内存还给 OS，让 RSS 真正下降；非 glibc 平台静默跳过。"""
-    try:
-        import ctypes
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def unload_model() -> bool:
-    """卸载常驻的 FunASR 模型，释放内存（~3GB）。返回是否真的卸载了。
-
-    与构建共用 _lock，确保不会和正在进行的加载/转写抢同一份模型；
-    卸载后预热状态归零，前端会重新显示「初始化模型」。
-    """
-    with FunASRLocal._lock:
-        if FunASRLocal._model is None:
-            return False
-        FunASRLocal._model = None
-        FunASRLocal._device = None
-    global _warmup_status, _warmup_message
-    with _warmup_lock:
-        _warmup_status, _warmup_message = "idle", ""
-    gc.collect()
-    _malloc_trim()
-    print("[funasr] 模型已卸载（空闲释放内存）", flush=True)
-    return True
-
-
-def get_asr():
-    """ASR 始终为本地 FunASR（离线、音频不出本机）。"""
-    return FunASRLocal()
-
-
 # ---- 子进程隔离：每场会议在独立进程跑模型，跑完即退、内存全部还给 OS ----
 def _run_worker(req: dict) -> dict:
     """启子进程 `python -m app.asr_worker` 处理一次请求；进程退出后内存被 OS 回收。"""
@@ -263,37 +177,19 @@ def _run_worker(req: dict) -> dict:
 
 def transcribe_job(wav, duration: float, hotword: str = "", spk_num: Optional[int] = None,
                    want_embeddings: bool = False):
-    """转写一场会议，返回 (segments, {speaker: 声纹中心})。
+    """转写一场会议（独立子进程），返回 (segments, {speaker: 声纹中心})。
 
-    config.ASR_IN_SUBPROCESS=1（默认）走子进程；否则进程内常驻模型。
-    want_embeddings=True 时顺带在同一进程里抽各 SPEAKER 的声纹中心（供自动命名），避免再加载模型。
+    want_embeddings=True 时顺带在同一子进程里抽各 SPEAKER 的声纹中心（供自动命名），避免再加载模型。
     """
-    if config.ASR_IN_SUBPROCESS:
-        res = _run_worker({
-            "op": "transcribe", "wav": str(wav), "duration": duration,
-            "hotword": hotword, "spk_num": spk_num, "want_embeddings": want_embeddings,
-        })
-        segs = [Segment(**d) for d in res.get("segments", [])]
-        return segs, (res.get("embeddings") or {})
-
-    asr = FunASRLocal()
-    segs = asr.transcribe(Path(wav), duration, hotword=hotword, spk_num=spk_num)
-    emb = {}
-    if want_embeddings:
-        from collections import defaultdict
-        spans = defaultdict(list)
-        for s in segs:
-            spans[s.speaker].append((s.start_seconds, s.end_seconds))
-        for spk, sp in spans.items():
-            v = asr.embed_spans(Path(wav), sp)
-            if v is not None:
-                emb[spk] = v
-    return segs, emb
+    res = _run_worker({
+        "op": "transcribe", "wav": str(wav), "duration": duration,
+        "hotword": hotword, "spk_num": spk_num, "want_embeddings": want_embeddings,
+    })
+    segs = [Segment(**d) for d in res.get("segments", [])]
+    return segs, (res.get("embeddings") or {})
 
 
 def embed_job(wav, spans) -> Optional[List[float]]:
-    """对若干语音段抽声纹中心（存声纹时用）。子进程模式下独立进程跑，跑完即退。"""
-    if config.ASR_IN_SUBPROCESS:
-        res = _run_worker({"op": "embed", "wav": str(wav), "spans": [list(s) for s in spans]})
-        return res.get("embedding")
-    return FunASRLocal().embed_spans(Path(wav), spans)
+    """对若干语音段抽声纹中心（存声纹时用），独立子进程跑、跑完即退。"""
+    res = _run_worker({"op": "embed", "wav": str(wav), "spans": [list(s) for s in spans]})
+    return res.get("embedding")

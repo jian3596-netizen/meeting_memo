@@ -145,20 +145,6 @@ def update_categories(req: CategoriesRequest) -> Dict:
     return {"ok": True, "categories": cleaned}
 
 
-# ---------------- 模型初始化（预热，避免第一场会议才开始下载/加载） ----------------
-@app.get("/api/warmup")
-def warmup_status() -> Dict:
-    from . import asr
-    return asr.warmup_state()
-
-
-@app.post("/api/warmup")
-def warmup_start() -> Dict:
-    """非阻塞触发本地 FunASR 模型加载（首次会从 ModelScope 下载 ~1.3GB）。"""
-    from . import asr
-    return asr.trigger_warmup()
-
-
 # ---------------- 声纹（说话人自动识别） ----------------
 @app.get("/api/voiceprints")
 def get_voiceprints() -> Dict:

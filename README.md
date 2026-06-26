@@ -75,19 +75,19 @@ docker run -d --name meeting-memo \            # 运行
 | `./data` | `/app/data` | SQLite、上传原文件、转码 wav、ASR 留档 |
 | `./models` | `/app/models` | FunASR/ModelScope 模型缓存（`MODELSCOPE_CACHE`），重建容器不丢、不重下 |
 
-### 预热模型（可选）
+### 预下载模型（可选）
 
-首次转写会联网下载 ~2.4GB 模型到 `./models`，第一场会议会比较慢；之后复用缓存、可离线转写。
-想提前下好：
+首次转写会联网下载 ~2.4GB 模型到 `./models`，之后复用缓存、可离线转写。
+转写在独立子进程里跑，每场会议从缓存加载一次模型（~十几秒，不重新下载）。想提前下好：
 
 ```bash
 docker compose run --rm meeting-memo \
-  python -c "from app.asr import FunASRLocal; FunASRLocal(); print('模型就绪')"
+  python -c "from app.asr import FunASRLocal; FunASRLocal(); print('模型已下载')"
 ```
 
 ### 迁移到内网 / 离线机
 
-在有网机器导出镜像，连同预热好的 `./models` 一起拷到目标机：
+在有网机器导出镜像，连同下载好的 `./models` 一起拷到目标机：
 
 ```bash
 docker save meeting-memo:latest | gzip > meeting-memo.tar.gz   # 有网机：导出
@@ -105,26 +105,28 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 ## 性能基线（参考：i5-1335U，无 GPU）
 
 - FunASR RTF ≈ 0.33x（40 分钟音频 ≈ 13 分钟 CPU 推理）
-- 模型每进程首次加载 ≈ 140s，之后进程内复用
-- 模型常驻内存约 3–4GB；默认空闲 15 分钟自动卸载释放（`MODEL_IDLE_TIMEOUT`，下次用自动重载），`0` 则常驻
+- 模型加载 ≈ 140s（CPU）/ 每场会议在子进程里加载一次
+- **内存**：转写/抽声纹在**独立子进程**里跑（`app/asr_worker.py`），峰值 ~3.5GB，**子进程一退出全部还给 OS**；主服务（FastAPI + 队列）常驻仅 ~250MB。代价是每场会议多一次模型加载。
 
 ## API（PRD 第 7 节）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/meetings` | 上传音频（multipart：file + template_type） |
-| GET | `/api/meetings` | 会议列表 |
+| POST | `/api/meetings` | 上传音频（multipart：file + category + spk_num） |
+| GET | `/api/meetings` | 会议列表（含分类库 categories） |
+| PATCH | `/api/meetings/{id}/meta` | 编辑录音元数据（标题/分类/标签/描述/音频时间） |
 | GET | `/api/meetings/{id}/status` | 处理状态 + 进度 |
 | GET | `/api/meetings/{id}/transcript` | 转写全文（带说话人/时间戳） |
 | GET | `/api/meetings/{id}/summary` | 结构化纪要 JSON |
 | PUT | `/api/meetings/{id}/summary` | 保存编辑后的纪要 |
-| POST | `/api/meetings/{id}/regenerate` | 换模板/加指令重新生成（仅重跑总结） |
+| POST | `/api/meetings/{id}/regenerate` | 换分类/加指令重新生成（仅重跑总结） |
 | POST | `/api/meetings/{id}/speakers` | 说话人改名 |
 | GET | `/api/meetings/{id}/audio` | 音频流（时间戳回听） |
 | GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
+| GET | `/api/categories` ｜ PUT | 分类库（名称 + 总结 Prompt）读取 / 保存 |
 | GET | `/api/hotwords` ｜ PUT | 热词词库 读取 / 保存 |
 | GET | `/api/voiceprints` | 声纹库列表 |
-| DELETE | `/api/voiceprints/{vid}` | 删除某声纹 |
+| DELETE | `/api/voiceprints?name=` | 删除某人全部声纹模板 |
 | POST | `/api/meetings/{id}/voiceprints` | 从该会议某说话人注册声纹（body：speaker + name） |
 
 ## 声纹 · 说话人自动识别
@@ -143,7 +145,7 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 - 无 GPU 时长音频较慢（见性能基线）；分轨依赖单声道。
 - pdf 导出暂未实现（先 md/docx）。
 - Windows 上已通过 `KMP_DUPLICATE_LIB_OK=TRUE`（在 `app/config.py` 自动设置）规避 OpenMP 冲突。
-- 会议模板：通用 / 项目 / 客户拜访 / 技术评审（PRD 第 5 节）。
+- 分类（带总结 Prompt）：内置 通用 / 项目 / 客户拜访 / 技术评审 / 日常记录 / 例会，可在「分类库」里增删并维护各自的 Prompt；换某条录音的分类可按新分类重生成纪要。
 
 ## 自测脚本
 
