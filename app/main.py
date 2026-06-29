@@ -108,8 +108,17 @@ async def create_meeting(
         template_type="general",
     )
     dest = config.UPLOAD_DIR / f"{mid}{ext}"
-    with open(dest, "wb") as out:
-        shutil.copyfileobj(file.file, out)
+    try:
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(file.file, out)
+    except Exception:
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        db.delete_meeting(mid)
+        raise
     fields = {"audio_path": str(dest)}
     if category.strip():
         fields["category"] = category.strip()   # 分类决定总结 Prompt
@@ -336,6 +345,7 @@ def update_summary(mid: str, summary: MeetingSummary) -> Dict:
 @app.post("/api/meetings/{mid}/regenerate", response_model=CreateMeetingResponse)
 def regenerate(mid: str, req: RegenerateRequest) -> CreateMeetingResponse:
     _require(mid)
+    db.set_status(mid, "summarizing", 80)
     _spawn(pipeline.regenerate, mid, req.category, req.custom_instruction)
     return CreateMeetingResponse(meeting_id=mid, status="summarizing")
 

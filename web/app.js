@@ -751,7 +751,7 @@ function renderHeader(m) {
   badge.className = "badge " + statusClass(m.status);
   const sel = el("#m-category-sel");
   // 当前分类若不在库里（被删过/历史值），临时补一个选项以正确显示
-  if (m.category && !categoryNames().includes(m.category)) {
+  if (m.category && ![...sel.options].some((o) => o.value === m.category)) {
     sel.insertAdjacentHTML("beforeend", `<option value="${esc(m.category)}">${esc(m.category)}</option>`);
   }
   sel.value = m.category || "";
