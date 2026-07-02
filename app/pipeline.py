@@ -229,7 +229,6 @@ def process_meeting(mid: str) -> None:
         apply_speaker_map(segments, db.get_speaker_map(mid))
         cat_name, cat_focus = _resolve_category(meeting.get("category"))
         summary = get_llm().summarize(segments, cat_name, cat_focus)
-        from . import config
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)
 
@@ -275,7 +274,6 @@ def regenerate(mid: str, category: Optional[str], custom_instruction: Optional[s
             raise RuntimeError("没有可用的转写，无法生成纪要")
         cat_name, cat_focus = _resolve_category(meeting.get("category"))
         summary = get_llm().summarize(segments, cat_name, cat_focus, custom_instruction)
-        from . import config
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)
         db.set_status(mid, "completed", 100)
