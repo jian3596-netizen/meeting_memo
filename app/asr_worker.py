@@ -16,8 +16,16 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from collections import defaultdict
 from pathlib import Path
+
+
+def _write_json(path: str, data: dict) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    Path(tmp).replace(path)
 
 
 def _run(req: dict) -> dict:
@@ -32,16 +40,25 @@ def _run(req: dict) -> dict:
             hotword=req.get("hotword", ""), spk_num=req.get("spk_num"),
         )
         out = {"segments": [s.model_dump() for s in segs]}
+        out_path = req.get("_out_path")
+        if out_path:
+            _write_json(out_path, out)
         if req.get("want_embeddings"):
-            spans = defaultdict(list)
-            for s in segs:
-                spans[s.speaker].append((s.start_seconds, s.end_seconds))
-            emb = {}
-            for spk, sp in spans.items():
-                v = asr.embed_spans(Path(req["wav"]), sp)
-                if v is not None:
-                    emb[spk] = v
-            out["embeddings"] = emb
+            try:
+                spans = defaultdict(list)
+                for s in segs:
+                    spans[s.speaker].append((s.start_seconds, s.end_seconds))
+                emb = {}
+                for spk, sp in spans.items():
+                    v = asr.embed_spans(Path(req["wav"]), sp)
+                    if v is not None:
+                        emb[spk] = v
+                out["embeddings"] = emb
+            except Exception as exc:  # noqa: BLE001
+                traceback.print_exc()
+                out["embedding_error"] = f"{type(exc).__name__}: {exc}"
+            if out_path:
+                _write_json(out_path, out)
         return out
 
     if op == "embed":
@@ -55,9 +72,9 @@ def main() -> None:
     req_path, out_path = sys.argv[1], sys.argv[2]
     with open(req_path, encoding="utf-8") as f:
         req = json.load(f)
+    req["_out_path"] = out_path
     out = _run(req)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False)
+    _write_json(out_path, out)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from collections import defaultdict
 
-from . import audio, config, db, export
+from . import audio, config, corrections, db, export
 from .asr import cosine, transcribe_job
 from .llm import get_llm
 from .models import MeetingSummary, Segment
@@ -215,6 +215,7 @@ def process_meeting(mid: str) -> None:
         step = "cleaning_text"
         db.set_status(mid, "cleaning_text", 65)
         clean_segments(segments)
+        corrections.apply_enabled_rules_to_segments(segments)
         db.save_segments(mid, segments)
 
         # 3.5 声纹自动命名（best-effort，失败不影响主流程）
@@ -272,6 +273,8 @@ def regenerate(mid: str, category: Optional[str], custom_instruction: Optional[s
         segments = load_segments(mid)
         if not segments:
             raise RuntimeError("没有可用的转写，无法生成纪要")
+        if corrections.apply_enabled_rules_to_segments(segments):
+            db.save_segments(mid, segments)
         cat_name, cat_focus = _resolve_category(meeting.get("category"))
         summary = get_llm().summarize(segments, cat_name, cat_focus, custom_instruction)
         _persist_summary(mid, summary, segments, config.LLM_MODEL)

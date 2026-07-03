@@ -108,6 +108,31 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 - 模型加载 ≈ 140s（CPU）/ 每场会议在子进程里加载一次
 - **内存**：转写/抽声纹在**独立子进程**里跑（`app/asr_worker.py`），峰值 ~3.5GB，**子进程一退出全部还给 OS**；主服务（FastAPI + 队列）常驻仅 ~250MB。代价是每场会议多一次模型加载。
 
+## 自动纠错库（v1.1）
+
+系统会根据你在编辑器里的人工核验结果自动维护领域纠错库，不需要单独手工维护术语文档。
+
+流程：
+
+```text
+AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽取候选纠错 -> 写入 correction_rules
+```
+
+规则启用策略偏保守：
+
+- 每次保存纪要都会记录一条 `correction_events` 编辑事件。
+- 只抽取短文本替换候选，避免把整句润色、删减、结构调整误当成 ASR 纠错。
+- 同一条 `wrong_text -> correct_text` 累计出现 3 次后自动启用。
+- 已启用规则会在新会议清洗转写后本地应用，不额外消耗 LLM token。
+- 历史会议重新生成纪要时，也会先应用已启用规则并回写转写 clean_text。
+
+内部表：
+
+| 表 | 说明 |
+| --- | --- |
+| `correction_events` | 保存每次纪要编辑前后的文本和候选纠错 |
+| `correction_rules` | 累计后的纠错规则、命中次数、置信度、启用状态 |
+
 ## API（PRD 第 7 节）
 
 | 方法 | 路径 | 说明 |
@@ -125,6 +150,7 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 | GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
 | GET | `/api/categories` ｜ PUT | 分类库（名称 + 总结 Prompt）读取 / 保存 |
 | GET | `/api/hotwords` ｜ PUT | 热词词库 读取 / 保存 |
+| GET | `/api/corrections` | 查看自动沉淀的纠错规则 |
 | GET | `/api/voiceprints` | 声纹库列表 |
 | DELETE | `/api/voiceprints?name=` | 删除某人全部声纹模板 |
 | POST | `/api/meetings/{id}/voiceprints` | 从该会议某说话人注册声纹（body：speaker + name） |

@@ -703,7 +703,9 @@ async function enrollVoiceprint(spk, btn) {
   const input = el(`#speaker-edit input[data-spk="${spk}"]`);
   const name = (input && input.value || "").trim();
   if (!name) { alert("请先在该说话人后面填写姓名，再点「存声纹」"); if (input) input.focus(); return; }
-  if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
+  const buttons = [...document.querySelectorAll("#speaker-edit .vp-enroll")];
+  buttons.forEach((b) => { b.disabled = true; });
+  if (btn) btn.textContent = "保存中…";
   try {
     const d = await api(`/api/meetings/${currentId}/voiceprints`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -711,9 +713,11 @@ async function enrollVoiceprint(spk, btn) {
     });
     await loadVoiceprints();
     if (btn) btn.textContent = d.action === "merged" ? "已增强✓" : "已新增✓";
+    buttons.forEach((b) => { if (b !== btn) b.disabled = false; });
   } catch (e) {
     alert("保存声纹失败：" + e.message);
-    if (btn) { btn.disabled = false; btn.textContent = "存声纹"; }
+    if (btn) btn.textContent = "存声纹";
+    buttons.forEach((b) => { b.disabled = false; });
   }
 }
 el("#btn-voiceprint-open").addEventListener("click", () => { el("#voiceprint-modal").hidden = false; });

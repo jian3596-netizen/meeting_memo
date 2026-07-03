@@ -158,13 +158,28 @@ def _run_worker(req: dict) -> dict:
             [sys.executable, "-m", "app.asr_worker", reqp, outp],
             capture_output=True, text=True,
         )
-        if not os.path.exists(outp):
-            tail = (proc.stderr or proc.stdout or "")[-1000:]
-            raise RuntimeError(f"ASR 子进程失败 (code={proc.returncode}): {tail}")
-        with open(outp, encoding="utf-8") as f:
-            return json.load(f)
+        if os.path.exists(outp):
+            with open(outp, encoding="utf-8") as f:
+                out = json.load(f)
+            if proc.returncode and req.get("op") == "transcribe" and out.get("segments"):
+                print(
+                    f"[asr] worker exited with code={proc.returncode}, "
+                    "using persisted transcript without optional post-processing",
+                    flush=True,
+                )
+            elif proc.returncode:
+                tail = (proc.stderr or proc.stdout or "")[-1000:]
+                raise RuntimeError(f"ASR 子进程失败 (code={proc.returncode}): {tail}")
+            if out.get("error"):
+                raise RuntimeError(str(out["error"]))
+            return out
+        tail = (proc.stderr or proc.stdout or "")[-1000:]
+        hint = ""
+        if proc.returncode == -9:
+            hint = "；进程被系统强制终止，常见原因是内存不足或容器/系统 OOM kill"
+        raise RuntimeError(f"ASR 子进程失败 (code={proc.returncode}{hint}): {tail}")
     finally:
-        for p in (reqp, outp):
+        for p in (reqp, outp, f"{outp}.tmp"):
             try:
                 os.remove(p)
             except OSError:

@@ -110,6 +110,33 @@ CREATE TABLE IF NOT EXISTS voiceprints (
     updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_voiceprints_name ON voiceprints(name);
+
+CREATE TABLE IF NOT EXISTS correction_events (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL,
+    before_text TEXT,
+    after_text TEXT,
+    candidates_json TEXT DEFAULT '[]',
+    created_at TEXT,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_correction_events_meeting ON correction_events(meeting_id, created_at);
+
+CREATE TABLE IF NOT EXISTS correction_rules (
+    id TEXT PRIMARY KEY,
+    wrong_text TEXT NOT NULL,
+    correct_text TEXT NOT NULL,
+    hit_count INTEGER DEFAULT 0,
+    confirmed_count INTEGER DEFAULT 0,
+    rejected_count INTEGER DEFAULT 0,
+    confidence REAL DEFAULT 0,
+    enabled INTEGER DEFAULT 0,
+    examples TEXT DEFAULT '[]',
+    created_at TEXT,
+    updated_at TEXT,
+    UNIQUE(wrong_text, correct_text)
+);
+CREATE INDEX IF NOT EXISTS idx_correction_rules_enabled ON correction_rules(enabled, wrong_text);
 """
 
 
@@ -280,6 +307,117 @@ def save_summary(mid: str, summary: MeetingSummary, markdown: str, model_name: s
             ),
         )
         conn.commit()
+
+
+# ---------- correction library ----------
+def save_correction_event(
+    mid: str, before_text: str, after_text: str, candidates: List[Dict[str, Any]]
+) -> None:
+    with closing(get_conn()) as conn:
+        conn.execute(
+            """INSERT INTO correction_events
+               (id, meeting_id, before_text, after_text, candidates_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                new_id(), mid, before_text, after_text,
+                json.dumps(candidates, ensure_ascii=False), _now(),
+            ),
+        )
+        conn.commit()
+
+
+def upsert_correction_rule(
+    wrong_text: str,
+    correct_text: str,
+    *,
+    confidence: float,
+    example: Dict[str, Any],
+    auto_enable_hits: int = 3,
+) -> Dict[str, Any]:
+    now = _now()
+    wrong_text = wrong_text.strip()
+    correct_text = correct_text.strip()
+    with closing(get_conn()) as conn:
+        row = conn.execute(
+            "SELECT * FROM correction_rules WHERE wrong_text=? AND correct_text=?",
+            (wrong_text, correct_text),
+        ).fetchone()
+        if row:
+            examples = _json_list(row["examples"])
+            examples.append(example)
+            examples = examples[-5:]
+            hit_count = int(row["hit_count"] or 0) + 1
+            merged_conf = max(float(row["confidence"] or 0), confidence)
+            enabled = int(row["enabled"] or 0)
+            if not enabled and hit_count >= auto_enable_hits and merged_conf >= 0.25:
+                enabled = 1
+            conn.execute(
+                """UPDATE correction_rules
+                   SET hit_count=?, confirmed_count=?, confidence=?, enabled=?,
+                       examples=?, updated_at=?
+                   WHERE id=?""",
+                (
+                    hit_count, hit_count, merged_conf, enabled,
+                    json.dumps(examples, ensure_ascii=False), now, row["id"],
+                ),
+            )
+            rid = row["id"]
+        else:
+            enabled = 1 if auto_enable_hits <= 1 and confidence >= 0.25 else 0
+            conn.execute(
+                """INSERT INTO correction_rules
+                   (id, wrong_text, correct_text, hit_count, confirmed_count,
+                    rejected_count, confidence, enabled, examples, created_at, updated_at)
+                   VALUES (?, ?, ?, 1, 1, 0, ?, ?, ?, ?, ?)""",
+                (
+                    new_id(), wrong_text, correct_text, confidence, enabled,
+                    json.dumps([example], ensure_ascii=False), now, now,
+                ),
+            )
+            rid = conn.execute(
+                "SELECT id FROM correction_rules WHERE wrong_text=? AND correct_text=?",
+                (wrong_text, correct_text),
+            ).fetchone()["id"]
+            hit_count = 1
+            merged_conf = confidence
+        conn.commit()
+    return {
+        "id": rid,
+        "wrong_text": wrong_text,
+        "correct_text": correct_text,
+        "hit_count": hit_count,
+        "confidence": merged_conf,
+        "enabled": bool(enabled),
+    }
+
+
+def get_enabled_correction_rules() -> List[Dict[str, Any]]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT * FROM correction_rules
+               WHERE enabled=1 AND wrong_text<>'' AND correct_text<>''
+               ORDER BY LENGTH(wrong_text) DESC, hit_count DESC"""
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_correction_rules(limit: int = 200) -> List[Dict[str, Any]]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT * FROM correction_rules
+               ORDER BY enabled DESC, hit_count DESC, updated_at DESC
+               LIMIT ?""",
+            (int(limit),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _json_list(raw: Any) -> List[Any]:
+    try:
+        data = json.loads(raw or "[]")
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        return []
 
 
 def get_summary_row(mid: str) -> Optional[Dict[str, Any]]:

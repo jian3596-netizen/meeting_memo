@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+import traceback
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import quote
@@ -16,7 +17,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, export, pipeline
+from . import config, corrections, db, export, pipeline
 from .models import (
     CategoriesRequest,
     CreateMeetingResponse,
@@ -29,6 +30,7 @@ from .models import (
 )
 
 app = FastAPI(title="AI 会议纪要系统", version="0.1.0")
+_voiceprint_lock = threading.Lock()
 
 
 @app.on_event("startup")
@@ -193,7 +195,14 @@ def enroll_voiceprint(mid: str, req: VoiceprintEnrollRequest) -> Dict:
     if not spans:
         raise HTTPException(status_code=400, detail=f"该会议中没有 {req.speaker} 的语音")
 
-    emb = embed_job(wav, spans)   # 子进程模式下独立进程抽声纹，跑完即退
+    try:
+        with _voiceprint_lock:
+            emb = embed_job(wav, spans)   # 子进程模式下独立进程抽声纹，跑完即退
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"提取声纹失败：{type(e).__name__}: {e}",
+        ) from e
     if emb is None:
         raise HTTPException(status_code=400, detail="提取声纹失败（该说话人有效语音太短）")
 
@@ -332,13 +341,24 @@ def get_summary(mid: str) -> Dict:
 @app.put("/api/meetings/{mid}/summary")
 def update_summary(mid: str, summary: MeetingSummary) -> Dict:
     _require(mid)
+    previous = pipeline.load_summary(mid)
     segs = pipeline.load_segments(mid)
     meeting = db.get_meeting(mid) or {}
     markdown = export.to_markdown(meeting, summary, segs)
     db.save_summary(mid, summary, markdown, config.LLM_MODEL)
     db.save_tasks(mid, summary)
     db.update_meeting(mid, title=summary.title)
-    return {"ok": True}
+    learned = []
+    try:
+        learned = corrections.learn_from_summary_edit(mid, previous, summary)
+    except Exception:  # noqa: BLE001 矫正规则沉淀失败不应影响纪要保存
+        traceback.print_exc()
+    return {"ok": True, "corrections_learned": learned}
+
+
+@app.get("/api/corrections")
+def get_corrections() -> Dict:
+    return {"rules": db.list_correction_rules()}
 
 
 # ---------------- 重新生成（7.5） ----------------
