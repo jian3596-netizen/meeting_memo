@@ -147,6 +147,7 @@ def init_db() -> None:
         _migrate_meetings_meta(conn)
         conn.commit()
     _seed_categories_if_empty()
+    _migrate_category_requirements_once()
 
 
 def _migrate_meetings_meta(conn: sqlite3.Connection) -> None:
@@ -480,8 +481,21 @@ def get_hotwords() -> List[str]:
         return []
 
 
-# ---------- 分类库（名称 + 总结 Prompt） ----------
-def get_categories() -> List[Dict[str, str]]:
+SUMMARY_FIELD_KEYS = ("summary", "topics", "decisions", "todos", "risks", "open_questions")
+
+
+def _clean_requirements(raw: Any) -> Dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: str(raw.get(key, "")).strip()
+        for key in SUMMARY_FIELD_KEYS
+        if str(raw.get(key, "")).strip()
+    }
+
+
+# ---------- 分类库（名称 + 总结 Prompt + 字段要求） ----------
+def get_categories() -> List[Dict[str, Any]]:
     raw = get_setting("categories")
     if raw is None:
         return []
@@ -489,22 +503,30 @@ def get_categories() -> List[Dict[str, str]]:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return []
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     for c in data:
         name = str(c.get("name", "")).strip()
         if name:
-            out.append({"name": name, "prompt": str(c.get("prompt", "")).strip()})
+            out.append({
+                "name": name,
+                "prompt": str(c.get("prompt", "")).strip(),
+                "requirements": _clean_requirements(c.get("requirements")),
+            })
     return out
 
 
-def set_categories(cats: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    cleaned: List[Dict[str, str]] = []
+def set_categories(cats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cleaned: List[Dict[str, Any]] = []
     seen = set()
     for c in cats:
         name = str(c.get("name", "")).strip()
         if name and name not in seen:
             seen.add(name)
-            cleaned.append({"name": name, "prompt": str(c.get("prompt", "")).strip()})
+            cleaned.append({
+                "name": name,
+                "prompt": str(c.get("prompt", "")).strip(),
+                "requirements": _clean_requirements(c.get("requirements")),
+            })
     set_setting("categories", json.dumps(cleaned, ensure_ascii=False))
     return cleaned
 
@@ -519,10 +541,36 @@ def get_category_prompt(name: str) -> Optional[str]:
     return None
 
 
+def get_category_requirements(name: str) -> Dict[str, str]:
+    name = (name or "").strip()
+    if not name:
+        return {}
+    for c in get_categories():
+        if c["name"] == name:
+            return dict(c.get("requirements") or {})
+    return {}
+
+
 def _seed_categories_if_empty() -> None:
     if get_setting("categories") is None:
         from .templates_prompts import category_seed
         set_setting("categories", json.dumps(category_seed(), ensure_ascii=False))
+
+
+def _migrate_category_requirements_once() -> None:
+    if get_setting("category_requirements_v1") == "done":
+        return
+    from .templates_prompts import DEFAULT_FIELD_REQUIREMENTS
+
+    cats = get_categories()
+    changed = False
+    for c in cats:
+        if not c.get("requirements"):
+            c["requirements"] = dict(DEFAULT_FIELD_REQUIREMENTS)
+            changed = True
+    if changed:
+        set_categories(cats)
+    set_setting("category_requirements_v1", "done")
 
 
 def set_hotwords(words: List[str]) -> List[str]:

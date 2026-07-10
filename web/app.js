@@ -4,7 +4,7 @@ const el = (s) => document.querySelector(s);
 
 let currentId = null;
 let pollTimer = null;
-let categories = [];   // [{name, prompt}]
+let categories = [];   // [{name, prompt, requirements}]
 let hotwords = [];
 let voiceprints = [];
 let currentSummary = null;
@@ -22,6 +22,14 @@ const STATUS_LABEL = {
   failed: "处理失败",
 };
 const RUNNING = new Set(["uploaded", "processing_audio", "transcribing", "cleaning_text", "summarizing"]);
+const CATEGORY_REQUIREMENT_FIELDS = [
+  ["summary", "整体摘要要求"],
+  ["topics", "关键讨论点要求"],
+  ["decisions", "决策要求"],
+  ["todos", "待办要求"],
+  ["risks", "风险要求"],
+  ["open_questions", "未决问题要求"],
+];
 
 // ---------- utils ----------
 function esc(s) {
@@ -168,7 +176,11 @@ let catDraft = [];
 let catSel = -1;
 
 function openCategoryModal() {
-  catDraft = categories.map((c) => ({ name: c.name, prompt: c.prompt || "" }));
+  catDraft = categories.map((c) => ({
+    name: c.name,
+    prompt: c.prompt || "",
+    requirements: { ...(c.requirements || {}) },
+  }));
   catSel = catDraft.length ? 0 : -1;
   renderCatModal();
   el("#category-modal").hidden = false;
@@ -180,6 +192,11 @@ function flushCatRight() {
   const ni = el("#cat-name-input"), pi = el("#cat-prompt-input");
   if (ni) catDraft[catSel].name = ni.value;
   if (pi) catDraft[catSel].prompt = pi.value;
+  catDraft[catSel].requirements = catDraft[catSel].requirements || {};
+  CATEGORY_REQUIREMENT_FIELDS.forEach(([key]) => {
+    const input = el(`#cat-req-${key}`);
+    if (input) catDraft[catSel].requirements[key] = input.value;
+  });
 }
 function renderCatModal() { renderCatLeft(); renderCatRight(); }
 
@@ -205,11 +222,19 @@ function renderCatRight() {
     return;
   }
   const c = catDraft[catSel];
+  const req = c.requirements || {};
   box.innerHTML = `
     <label class="edit-label">分类名称</label>
     <input id="cat-name-input" class="field" value="${esc(c.name)}" placeholder="分类名称">
     <label class="edit-label" style="margin-top:12px">总结 Prompt（关注重点）</label>
-    <textarea id="cat-prompt-input" class="edit-ta cat-prompt-big" placeholder="这个分类生成纪要时的关注重点，例如：关注项目进展、阻塞、决策、各事项负责人与截止时间…">${esc(c.prompt)}</textarea>`;
+    <textarea id="cat-prompt-input" class="edit-ta cat-prompt-main" placeholder="这个分类生成纪要时的关注重点，例如：关注项目进展、阻塞、决策、各事项负责人与截止时间…">${esc(c.prompt)}</textarea>
+    <div class="cat-req-title">字段要求</div>
+    <div class="cat-req-grid">
+      ${CATEGORY_REQUIREMENT_FIELDS.map(([key, label]) => `
+        <label class="edit-label">${label}</label>
+        <textarea id="cat-req-${key}" class="edit-ta cat-req-input" placeholder="对 ${key} 的输出要求">${esc(req[key] || "")}</textarea>
+      `).join("")}
+    </div>`;
   el("#cat-name-input").addEventListener("input", () => {
     catDraft[catSel].name = el("#cat-name-input").value;
     renderCatLeft();
@@ -219,7 +244,15 @@ function renderCatRight() {
 async function saveCategories() {
   flushCatRight();
   const list = catDraft
-    .map((c) => ({ name: (c.name || "").trim(), prompt: (c.prompt || "").trim() }))
+    .map((c) => ({
+      name: (c.name || "").trim(),
+      prompt: (c.prompt || "").trim(),
+      requirements: Object.fromEntries(
+        CATEGORY_REQUIREMENT_FIELDS
+          .map(([key]) => [key, ((c.requirements || {})[key] || "").trim()])
+          .filter(([, value]) => value)
+      ),
+    }))
     .filter((c) => c.name);
   const btn = el("#cat-save");
   btn.disabled = true; btn.textContent = "保存中…";
@@ -243,7 +276,7 @@ el("#cat-cancel").addEventListener("click", closeCategoryModal);
 el("#cat-save").addEventListener("click", saveCategories);
 el("#cat-add").addEventListener("click", () => {
   flushCatRight();
-  catDraft.push({ name: "新分类", prompt: "" });
+  catDraft.push({ name: "新分类", prompt: "", requirements: {} });
   catSel = catDraft.length - 1;
   renderCatModal();
   const ni = el("#cat-name-input"); if (ni) { ni.focus(); ni.select(); }
@@ -1015,7 +1048,6 @@ el("#btn-regen").addEventListener("click", async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         category: el("#m-category-sel").value,
-        custom_instruction: el("#m-instruction").value.trim() || null,
       }),
     });
     el("#result").hidden = true;

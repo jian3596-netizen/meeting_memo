@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 TEMPLATES: Dict[str, Dict[str, str]] = {
     "general": {
@@ -60,10 +60,26 @@ def template_name(template_type: str) -> str:
 DEFAULT_CATEGORY_NAME = "通用会议"
 DEFAULT_CATEGORY_FOCUS = TEMPLATES["general"]["focus"]
 
+DEFAULT_FIELD_REQUIREMENTS: Dict[str, str] = {
+    "summary": "150字以内概括整场会议的背景、主要内容和核心结论。",
+    "topics": "每条说明讨论背景、主要观点、结论或当前状态；除原文信息不足外，不要只写一句结论。",
+    "decisions": "只记录会议中明确拍板或达成一致的事项，不要把建议、猜测写成决策。",
+    "todos": "只记录明确需要后续执行的事项；负责人或截止时间不明确时填“未明确”。",
+    "risks": "记录明确提到的风险、阻塞、依赖或可能影响结果的不确定因素。",
+    "open_questions": "记录会议中提出但尚未解决、尚未确认或需要后续跟进的问题。",
+}
 
-def category_seed() -> List[Dict[str, str]]:
+
+def category_seed() -> List[Dict[str, Any]]:
     """内置模板作为分类库的初始种子（名称 + Prompt）。"""
-    return [{"name": v["name"], "prompt": v["focus"]} for v in TEMPLATES.values()]
+    return [
+        {
+            "name": v["name"],
+            "prompt": v["focus"],
+            "requirements": dict(DEFAULT_FIELD_REQUIREMENTS),
+        }
+        for v in TEMPLATES.values()
+    ]
 
 
 SYSTEM_PROMPT = """你是一名专业的中文会议纪要助手。你的唯一信息来源是用户提供的会议转写文本。
@@ -91,7 +107,7 @@ JSON 结构（严格遵守字段名）：
 def _instruction_block(name: str, focus: str, custom_instruction: Optional[str]) -> str:
     block = f"本次会议类型：{name or DEFAULT_CATEGORY_NAME}。{focus or DEFAULT_CATEGORY_FOCUS}"
     if custom_instruction:
-        block += f"\n额外要求：{custom_instruction.strip()}"
+        block += f"\n字段要求：\n{custom_instruction.strip()}"
     return block
 
 

@@ -50,7 +50,6 @@
         </div>
         <div class="actions">
           <select id="m-category-sel" class="field field-sm" title="分类（决定总结 Prompt）"></select>
-          <input type="text" id="m-instruction" class="field field-sm" placeholder="自定义指令（可选）">
           <button id="btn-regen" class="btn btn-secondary btn-sm">重新生成</button>
           <a id="btn-export-md" class="btn btn-ghost btn-sm" target="_blank">导出 MD</a>
           <a id="btn-export-docx" class="btn btn-ghost btn-sm" target="_blank">导出 Word</a>
@@ -124,11 +123,11 @@
 <div id="category-modal" class="modal-mask" hidden>
   <div class="modal">
     <div class="modal-header">
-      <div class="modal-title">分类库 <span class="card-title-sub">每个分类带一段总结 Prompt</span></div>
+      <div class="modal-title">分类库 <span class="card-title-sub">每个分类带关注重点和字段要求</span></div>
       <button id="cat-close" class="modal-close" title="关闭">×</button>
     </div>
     <div class="modal-sub">
-      分类决定生成纪要时的关注重点（Prompt）。左边选分类，右边编辑它的 Prompt；
+      分类决定生成纪要时的关注重点（Prompt）和各字段的输出要求。左边选分类，右边编辑配置；
       给某条录音换分类时会问你是否按新分类重新生成纪要。
     </div>
     <div class="cat-layout">

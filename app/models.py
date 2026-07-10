@@ -6,7 +6,7 @@ MeetingSummary 同时用于校验 LLM 的 JSON 输出——字段缺省一律落
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -81,7 +81,7 @@ class StatusResponse(BaseModel):
 
 class RegenerateRequest(BaseModel):
     category: Optional[str] = None          # 分类名（None=保持原分类）
-    custom_instruction: Optional[str] = None
+    custom_instruction: Optional[str] = None  # 兼容旧前端/接口；新逻辑优先使用分类库字段要求
 
 
 class HotwordsRequest(BaseModel):
@@ -91,6 +91,7 @@ class HotwordsRequest(BaseModel):
 class CategoryItem(BaseModel):
     name: str
     prompt: str = ""
+    requirements: Dict[str, str] = Field(default_factory=dict)
 
 
 class CategoriesRequest(BaseModel):
