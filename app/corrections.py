@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import unicodedata
 from typing import Any, Dict, Iterable, List, Optional
 
 from . import db
@@ -193,8 +194,10 @@ def _clean_edge(text: str) -> str:
 def _normalize_protected_terms(terms: Optional[Iterable[str]]) -> set[str]:
     out: set[str] = set()
     for term in terms or []:
-        cleaned = _clean_edge(str(term or ""))
-        if len(cleaned) >= 2:
+        cleaned = _comparison_form(str(term or ""))
+        # A one-character display name (for example, "王") can still be
+        # embedded in a longer replacement candidate such as "王总".
+        if cleaned:
             out.add(cleaned)
     return out
 
@@ -202,12 +205,17 @@ def _normalize_protected_terms(terms: Optional[Iterable[str]]) -> set[str]:
 def _is_protected_candidate(wrong: str, correct: str, protected_terms: set[str]) -> bool:
     if _SPEAKER_LABEL_RE.search(wrong or "") or _SPEAKER_LABEL_RE.search(correct or ""):
         return True
-    wrong = _clean_edge(wrong)
-    correct = _clean_edge(correct)
+    wrong = _comparison_form(wrong)
+    correct = _comparison_form(correct)
     for term in protected_terms:
         if term in wrong or term in correct or wrong in term or correct in term:
             return True
     return False
+
+
+def _comparison_form(text: str) -> str:
+    """Normalize terms before containment checks without changing saved text."""
+    return unicodedata.normalize("NFKC", _clean_edge(text)).casefold()
 
 
 def _is_candidate(wrong: str, correct: str) -> bool:
