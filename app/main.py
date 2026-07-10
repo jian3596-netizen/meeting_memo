@@ -78,6 +78,25 @@ def _meta_fields(m: Dict) -> Dict:
     }
 
 
+def _summary_correction_protected_terms(mid: str, meeting: Dict, segments: List) -> List[str]:
+    terms: List[str] = []
+    smap = db.get_speaker_map(mid)
+    for key, value in smap.items():
+        terms.extend([key, value])
+    for seg in segments:
+        terms.extend([getattr(seg, "speaker", ""), getattr(seg, "speaker_name", "") or ""])
+    terms.extend(_jload(meeting.get("participants"), []))
+
+    cleaned: List[str] = []
+    seen = set()
+    for term in terms:
+        term = str(term or "").strip()
+        if len(term) >= 2 and term not in seen:
+            seen.add(term)
+            cleaned.append(term)
+    return cleaned
+
+
 def _content_disposition(filename: str) -> str:
     """RFC 5987：HTTP 头只能 latin-1，中文文件名需用 filename* 编码。"""
     ascii_fallback = filename.encode("ascii", "ignore").decode("ascii") or "meeting"
@@ -350,7 +369,10 @@ def update_summary(mid: str, summary: MeetingSummary) -> Dict:
     db.update_meeting(mid, title=summary.title)
     learned = []
     try:
-        learned = corrections.learn_from_summary_edit(mid, previous, summary)
+        protected_terms = _summary_correction_protected_terms(mid, meeting, segs)
+        learned = corrections.learn_from_summary_edit(
+            mid, previous, summary, protected_terms=protected_terms
+        )
     except Exception:  # noqa: BLE001 矫正规则沉淀失败不应影响纪要保存
         traceback.print_exc()
     return {"ok": True, "corrections_learned": learned}

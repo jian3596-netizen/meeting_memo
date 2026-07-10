@@ -21,6 +21,7 @@ MAX_CANDIDATES_PER_EDIT = 20
 MAX_RULES_PER_TEXT = 50
 _TRIM_CHARS = " \t\r\n，。！？；：、,.!?;:()（）[]【】\"'“”‘’"
 _CONNECTORS = set("和与及或跟同、，。！？；：,.!?;:()（）[]【】")
+_SPEAKER_LABEL_RE = re.compile(r"\bSPEAKER_\d+\b", re.IGNORECASE)
 
 
 def summary_to_text(summary: Optional[MeetingSummary]) -> str:
@@ -47,13 +48,19 @@ def learn_from_summary_edit(
     meeting_id: str,
     before: Optional[MeetingSummary],
     after: MeetingSummary,
+    protected_terms: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
     before_text = summary_to_text(before)
     after_text = summary_to_text(after)
     if not before_text or before_text == after_text:
         return []
 
+    protected = _normalize_protected_terms(protected_terms)
     candidates = extract_candidates(before_text, after_text)
+    candidates = [
+        c for c in candidates
+        if not _is_protected_candidate(c["wrong_text"], c["correct_text"], protected)
+    ]
     if not candidates:
         db.save_correction_event(meeting_id, before_text, after_text, [])
         return []
@@ -181,6 +188,26 @@ def _compact_space(text: str) -> str:
 
 def _clean_edge(text: str) -> str:
     return (text or "").strip(_TRIM_CHARS)
+
+
+def _normalize_protected_terms(terms: Optional[Iterable[str]]) -> set[str]:
+    out: set[str] = set()
+    for term in terms or []:
+        cleaned = _clean_edge(str(term or ""))
+        if len(cleaned) >= 2:
+            out.add(cleaned)
+    return out
+
+
+def _is_protected_candidate(wrong: str, correct: str, protected_terms: set[str]) -> bool:
+    if _SPEAKER_LABEL_RE.search(wrong or "") or _SPEAKER_LABEL_RE.search(correct or ""):
+        return True
+    wrong = _clean_edge(wrong)
+    correct = _clean_edge(correct)
+    for term in protected_terms:
+        if term in wrong or term in correct or wrong in term or correct in term:
+            return True
+    return False
 
 
 def _is_candidate(wrong: str, correct: str) -> bool:
