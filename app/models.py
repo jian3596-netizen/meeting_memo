@@ -55,8 +55,18 @@ class OpenQuestion(BaseModel):
     source_time: str = UNSPECIFIED
 
 
+class SummarySection(BaseModel):
+    """分类配置生成的通用纪要章节。"""
+
+    id: str
+    title: str
+    content: str = ""
+
+
 class MeetingSummary(BaseModel):
     title: str = "会议纪要"
+    sections: List[SummarySection] = Field(default_factory=list)
+    # 以下为 v1.2 兼容字段；v1.3 新生成的纪要使用 sections。
     summary: str = ""
     topics: List[Topic] = Field(default_factory=list)
     decisions: List[Decision] = Field(default_factory=list)
@@ -91,7 +101,15 @@ class HotwordsRequest(BaseModel):
 class CategoryItem(BaseModel):
     name: str
     prompt: str = ""
+    sections: Optional[List["CategorySection"]] = None
+    # 接受旧客户端数据，由数据层迁移为 sections。
     requirements: Dict[str, str] = Field(default_factory=dict)
+
+
+class CategorySection(BaseModel):
+    id: str
+    title: str
+    prompt: str = ""
 
 
 class CategoriesRequest(BaseModel):

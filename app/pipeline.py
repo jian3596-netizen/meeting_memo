@@ -155,6 +155,8 @@ def rename_in_summary(mid: str, replacements: dict) -> None:
         return s
 
     summary.title = rep(summary.title)
+    for section in summary.sections:
+        section.content = rep(section.content)
     summary.summary = rep(summary.summary)
     for t in summary.topics:
         t.title, t.summary = rep(t.title), rep(t.summary)
@@ -228,8 +230,8 @@ def process_meeting(mid: str) -> None:
         step = "summarizing"
         db.set_status(mid, "summarizing", 80)
         apply_speaker_map(segments, db.get_speaker_map(mid))
-        cat_name, cat_focus, field_requirements = _resolve_category(meeting.get("category"))
-        summary = get_llm().summarize(segments, cat_name, cat_focus, field_requirements)
+        cat_name, cat_focus, sections = _resolve_category(meeting.get("category"))
+        summary = get_llm().summarize(segments, cat_name, cat_focus, sections)
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)
 
@@ -250,29 +252,22 @@ def process_meeting(mid: str) -> None:
         db.mark_failed(mid, step, f"{type(e).__name__}: {e}")
 
 
-def _format_field_requirements(requirements: dict) -> Optional[str]:
-    lines = [
-        f"- {key}：{str(text).strip()}"
-        for key, text in (requirements or {}).items()
-        if key in {"summary", "topics", "decisions", "todos", "risks", "open_questions"}
-        and str(text).strip()
-    ]
-    return "\n".join(lines) or None
-
-
 def _resolve_category(name: Optional[str]):
-    """会议分类 → (名称, 总结Prompt, 字段要求)；分类没设或没Prompt时回落到默认。"""
+    """会议分类 → (名称, 总结 Prompt, 有序章节配置)。"""
     from . import templates_prompts
     name = (name or "").strip()
-    focus = db.get_category_prompt(name)
-    requirements = db.get_category_requirements(name)
-    if not focus:
+    category = next((c for c in db.get_categories() if c["name"] == name), None)
+    if category:
         return (
-            name or templates_prompts.DEFAULT_CATEGORY_NAME,
-            templates_prompts.DEFAULT_CATEGORY_FOCUS,
-            _format_field_requirements(templates_prompts.DEFAULT_FIELD_REQUIREMENTS),
+            name,
+            category.get("prompt") or templates_prompts.DEFAULT_CATEGORY_FOCUS,
+            list(category.get("sections") or []),
         )
-    return (name, focus, _format_field_requirements(requirements))
+    return (
+        name or templates_prompts.DEFAULT_CATEGORY_NAME,
+        templates_prompts.DEFAULT_CATEGORY_FOCUS,
+        templates_prompts.default_sections(),
+    )
 
 
 def regenerate(mid: str, category: Optional[str], custom_instruction: Optional[str]) -> None:
@@ -290,12 +285,13 @@ def regenerate(mid: str, category: Optional[str], custom_instruction: Optional[s
             raise RuntimeError("没有可用的转写，无法生成纪要")
         if corrections.apply_enabled_rules_to_segments(segments):
             db.save_segments(mid, segments)
-        cat_name, cat_focus, field_requirements = _resolve_category(meeting.get("category"))
+        cat_name, cat_focus, sections = _resolve_category(meeting.get("category"))
         summary = get_llm().summarize(
             segments,
             cat_name,
             cat_focus,
-            field_requirements or custom_instruction,
+            sections,
+            custom_instruction,
         )
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)

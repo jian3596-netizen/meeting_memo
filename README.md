@@ -148,7 +148,7 @@ AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽�
 | POST | `/api/meetings/{id}/speakers` | 说话人改名 |
 | GET | `/api/meetings/{id}/audio` | 音频流（时间戳回听） |
 | GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
-| GET | `/api/categories` ｜ PUT | 分类库（名称 + 总结 Prompt）读取 / 保存 |
+| GET | `/api/categories` ｜ PUT | 分类库（名称 + 总结 Prompt + 有序章节及章节 Prompt）读取 / 保存 |
 | GET | `/api/hotwords` ｜ PUT | 热词词库 读取 / 保存 |
 | GET | `/api/corrections` | 查看自动沉淀的纠错规则 |
 | GET | `/api/voiceprints` | 声纹库列表 |
@@ -171,7 +171,7 @@ AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽�
 - 无 GPU 时长音频较慢（见性能基线）；分轨依赖单声道。
 - pdf 导出暂未实现（先 md/docx）。
 - Windows 上已通过 `KMP_DUPLICATE_LIB_OK=TRUE`（在 `app/config.py` 自动设置）规避 OpenMP 冲突。
-- 分类（带总结 Prompt）：内置 通用 / 项目 / 客户拜访 / 技术评审 / 日常记录 / 例会，可在「分类库」里增删并维护各自的 Prompt；换某条录音的分类可按新分类重生成纪要。
+- 分类（自定义纪要结构）：内置 通用 / 项目 / 客户拜访 / 技术评审 / 日常记录 / 例会；可在「分类库」里增删分类，并为每个分类新增、删除、排序纪要章节及维护各章节 Prompt。换某条录音的分类后可按新结构重新生成纪要。
 
 ## 自测脚本
 

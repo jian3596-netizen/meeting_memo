@@ -20,22 +20,27 @@ def to_markdown(meeting: Dict[str, Any], summary: MeetingSummary, segments: List
         f"> 会议类型：{template_name(meeting.get('template_type', 'general'))} ｜ "
         f"时长：{hh:02d}:{mm:02d}:{ss:02d} ｜ 原文件：{meeting.get('original_filename', '')}\n"
     )
-    L.append("## 会议摘要\n")
-    L.append(summary.summary + "\n")
+    if summary.sections:
+        for section in summary.sections:
+            L.append(f"## {section.title}\n")
+            L.append((section.content or "未提及") + "\n")
+    else:
+        L.append("## 会议摘要\n")
+        L.append(summary.summary + "\n")
 
-    if summary.topics:
+    if not summary.sections and summary.topics:
         L.append("## 关键讨论点\n")
         for t in summary.topics:
             L.append(f"- **{t.title}**（{t.source_time}）：{t.summary}")
         L.append("")
 
-    if summary.decisions:
+    if not summary.sections and summary.decisions:
         L.append("## 已确认决策\n")
         for d in summary.decisions:
             L.append(f"- {d.content}（{d.source_time}）")
         L.append("")
 
-    if summary.todos:
+    if not summary.sections and summary.todos:
         L.append("## 待办事项\n")
         L.append("| 负责人 | 事项 | 截止时间 | 出处 |")
         L.append("| --- | --- | --- | --- |")
@@ -43,13 +48,13 @@ def to_markdown(meeting: Dict[str, Any], summary: MeetingSummary, segments: List
             L.append(f"| {t.owner} | {t.task} | {t.deadline} | {t.source_time} |")
         L.append("")
 
-    if summary.risks:
+    if not summary.sections and summary.risks:
         L.append("## 风险问题\n")
         for r in summary.risks:
             L.append(f"- {r.content}（{r.source_time}）")
         L.append("")
 
-    if summary.open_questions:
+    if not summary.sections and summary.open_questions:
         L.append("## 未决问题\n")
         for q in summary.open_questions:
             L.append(f"- {q.content}（{q.source_time}）")
@@ -74,20 +79,25 @@ def to_docx(meeting: Dict[str, Any], summary: MeetingSummary, segments: List[Seg
         f"原文件：{meeting.get('original_filename', '')}"
     )
 
-    doc.add_heading("会议摘要", level=1)
-    doc.add_paragraph(summary.summary)
+    if summary.sections:
+        for section in summary.sections:
+            doc.add_heading(section.title, level=1)
+            doc.add_paragraph(section.content or "未提及")
+    else:
+        doc.add_heading("会议摘要", level=1)
+        doc.add_paragraph(summary.summary)
 
-    if summary.topics:
+    if not summary.sections and summary.topics:
         doc.add_heading("关键讨论点", level=1)
         for t in summary.topics:
             doc.add_paragraph(f"{t.title}（{t.source_time}）：{t.summary}", style="List Bullet")
 
-    if summary.decisions:
+    if not summary.sections and summary.decisions:
         doc.add_heading("已确认决策", level=1)
         for d in summary.decisions:
             doc.add_paragraph(f"{d.content}（{d.source_time}）", style="List Bullet")
 
-    if summary.todos:
+    if not summary.sections and summary.todos:
         doc.add_heading("待办事项", level=1)
         table = doc.add_table(rows=1, cols=4)
         table.style = "Light Grid Accent 1"
@@ -99,12 +109,12 @@ def to_docx(meeting: Dict[str, Any], summary: MeetingSummary, segments: List[Seg
                 t.owner, t.task, t.deadline, t.source_time
             )
 
-    if summary.risks:
+    if not summary.sections and summary.risks:
         doc.add_heading("风险问题", level=1)
         for r in summary.risks:
             doc.add_paragraph(f"{r.content}（{r.source_time}）", style="List Bullet")
 
-    if summary.open_questions:
+    if not summary.sections and summary.open_questions:
         doc.add_heading("未决问题", level=1)
         for q in summary.open_questions:
             doc.add_paragraph(f"{q.content}（{q.source_time}）", style="List Bullet")

@@ -148,6 +148,7 @@ def init_db() -> None:
         conn.commit()
     _seed_categories_if_empty()
     _migrate_category_requirements_once()
+    _migrate_category_sections_once()
 
 
 def _migrate_meetings_meta(conn: sqlite3.Connection) -> None:
@@ -494,6 +495,32 @@ def _clean_requirements(raw: Any) -> Dict[str, str]:
     }
 
 
+def _clean_sections(raw: Any) -> List[Dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    cleaned: List[Dict[str, str]] = []
+    seen = set()
+    for i, section in enumerate(raw):
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get("title", "")).strip()
+        section_id = str(section.get("id", "")).strip() or f"section_{i + 1}"
+        if not title or section_id in seen:
+            continue
+        seen.add(section_id)
+        cleaned.append({
+            "id": section_id,
+            "title": title,
+            "prompt": str(section.get("prompt", "")).strip(),
+        })
+    return cleaned
+
+
+def _sections_from_requirements(requirements: Dict[str, str]) -> List[Dict[str, str]]:
+    from .templates_prompts import default_sections
+    return default_sections(requirements or None)
+
+
 # ---------- 分类库（名称 + 总结 Prompt + 字段要求） ----------
 def get_categories() -> List[Dict[str, Any]]:
     raw = get_setting("categories")
@@ -507,10 +534,14 @@ def get_categories() -> List[Dict[str, Any]]:
     for c in data:
         name = str(c.get("name", "")).strip()
         if name:
+            requirements = _clean_requirements(c.get("requirements"))
+            has_sections = "sections" in c and c.get("sections") is not None
+            sections = _clean_sections(c.get("sections"))
             out.append({
                 "name": name,
                 "prompt": str(c.get("prompt", "")).strip(),
-                "requirements": _clean_requirements(c.get("requirements")),
+                "sections": sections if has_sections else _sections_from_requirements(requirements),
+                "requirements": requirements,
             })
     return out
 
@@ -522,10 +553,14 @@ def set_categories(cats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         name = str(c.get("name", "")).strip()
         if name and name not in seen:
             seen.add(name)
+            requirements = _clean_requirements(c.get("requirements"))
+            has_sections = "sections" in c and c.get("sections") is not None
+            sections = _clean_sections(c.get("sections"))
             cleaned.append({
                 "name": name,
                 "prompt": str(c.get("prompt", "")).strip(),
-                "requirements": _clean_requirements(c.get("requirements")),
+                "sections": sections if has_sections else _sections_from_requirements(requirements),
+                "requirements": requirements,
             })
     set_setting("categories", json.dumps(cleaned, ensure_ascii=False))
     return cleaned
@@ -551,6 +586,14 @@ def get_category_requirements(name: str) -> Dict[str, str]:
     return {}
 
 
+def get_category_sections(name: str) -> List[Dict[str, str]]:
+    name = (name or "").strip()
+    for c in get_categories():
+        if c["name"] == name:
+            return [dict(s) for s in c.get("sections") or []]
+    return []
+
+
 def _seed_categories_if_empty() -> None:
     if get_setting("categories") is None:
         from .templates_prompts import category_seed
@@ -571,6 +614,14 @@ def _migrate_category_requirements_once() -> None:
     if changed:
         set_categories(cats)
     set_setting("category_requirements_v1", "done")
+
+
+def _migrate_category_sections_once() -> None:
+    """把 v1.2 的固定字段要求持久化成有序、可编辑章节。"""
+    if get_setting("category_sections_v2") == "done":
+        return
+    set_categories(get_categories())
+    set_setting("category_sections_v2", "done")
 
 
 def set_hotwords(words: List[str]) -> List[str]:

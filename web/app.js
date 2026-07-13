@@ -4,7 +4,7 @@ const el = (s) => document.querySelector(s);
 
 let currentId = null;
 let pollTimer = null;
-let categories = [];   // [{name, prompt, requirements}]
+let categories = [];   // [{name, prompt, sections:[{id,title,prompt}]}]
 let hotwords = [];
 let voiceprints = [];
 let currentSummary = null;
@@ -22,14 +22,21 @@ const STATUS_LABEL = {
   failed: "处理失败",
 };
 const RUNNING = new Set(["uploaded", "processing_audio", "transcribing", "cleaning_text", "summarizing"]);
-const CATEGORY_REQUIREMENT_FIELDS = [
-  ["summary", "整体摘要要求"],
-  ["topics", "关键讨论点要求"],
-  ["decisions", "决策要求"],
-  ["todos", "待办要求"],
-  ["risks", "风险要求"],
-  ["open_questions", "未决问题要求"],
+const DEFAULT_CATEGORY_SECTIONS = [
+  ["summary", "会议摘要", "150字以内概括整场会议的背景、主要内容和核心结论。"],
+  ["topics", "关键讨论点", "说明讨论背景、主要观点、结论或当前状态。"],
+  ["decisions", "已确认决策", "只记录会议中明确拍板或达成一致的事项。"],
+  ["todos", "待办事项", "记录后续执行事项、负责人、截止时间和出处。"],
+  ["risks", "风险问题", "记录明确提到的风险、阻塞、依赖和不确定因素。"],
+  ["open_questions", "未决问题", "记录尚未解决、尚未确认或需后续跟进的问题。"],
 ];
+
+function defaultCategorySections() {
+  return DEFAULT_CATEGORY_SECTIONS.map(([id, title, prompt]) => ({ id, title, prompt }));
+}
+function newSectionId() {
+  return `section_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
 
 // ---------- utils ----------
 function esc(s) {
@@ -179,7 +186,7 @@ function openCategoryModal() {
   catDraft = categories.map((c) => ({
     name: c.name,
     prompt: c.prompt || "",
-    requirements: { ...(c.requirements || {}) },
+    sections: (c.sections || []).map((s) => ({ ...s })),
   }));
   catSel = catDraft.length ? 0 : -1;
   renderCatModal();
@@ -192,10 +199,11 @@ function flushCatRight() {
   const ni = el("#cat-name-input"), pi = el("#cat-prompt-input");
   if (ni) catDraft[catSel].name = ni.value;
   if (pi) catDraft[catSel].prompt = pi.value;
-  catDraft[catSel].requirements = catDraft[catSel].requirements || {};
-  CATEGORY_REQUIREMENT_FIELDS.forEach(([key]) => {
-    const input = el(`#cat-req-${key}`);
-    if (input) catDraft[catSel].requirements[key] = input.value;
+  catDraft[catSel].sections = catDraft[catSel].sections || [];
+  catDraft[catSel].sections.forEach((section, i) => {
+    const title = el(`#cat-section-title-${i}`), prompt = el(`#cat-section-prompt-${i}`);
+    if (title) section.title = title.value;
+    if (prompt) section.prompt = prompt.value;
   });
 }
 function renderCatModal() { renderCatLeft(); renderCatRight(); }
@@ -207,7 +215,10 @@ function renderCatLeft() {
     return;
   }
   box.innerHTML = catDraft.map((c, i) =>
-    `<div class="cat-item${i === catSel ? " active" : ""}" data-i="${i}">${esc(c.name || "（未命名）")}</div>`).join("");
+    `<div class="cat-item${i === catSel ? " active" : ""}" data-i="${i}">
+      <span class="cat-item-name">${esc(c.name || "（未命名）")}</span>
+      <span class="cat-item-count">${(c.sections || []).length} 章</span>
+    </div>`).join("");
   box.querySelectorAll(".cat-item").forEach((it) => it.addEventListener("click", () => {
     flushCatRight();
     catSel = +it.dataset.i;
@@ -222,23 +233,75 @@ function renderCatRight() {
     return;
   }
   const c = catDraft[catSel];
-  const req = c.requirements || {};
+  const sections = c.sections || [];
   box.innerHTML = `
-    <label class="edit-label">分类名称</label>
-    <input id="cat-name-input" class="field" value="${esc(c.name)}" placeholder="分类名称">
-    <label class="edit-label" style="margin-top:12px">总结 Prompt（关注重点）</label>
-    <textarea id="cat-prompt-input" class="edit-ta cat-prompt-main" placeholder="这个分类生成纪要时的关注重点，例如：关注项目进展、阻塞、决策、各事项负责人与截止时间…">${esc(c.prompt)}</textarea>
-    <div class="cat-req-title">字段要求</div>
-    <div class="cat-req-grid">
-      ${CATEGORY_REQUIREMENT_FIELDS.map(([key, label]) => `
-        <label class="edit-label">${label}</label>
-        <textarea id="cat-req-${key}" class="edit-ta cat-req-input" placeholder="对 ${key} 的输出要求">${esc(req[key] || "")}</textarea>
-      `).join("")}
+    <div class="cat-editor-top">
+      <div class="cat-editor-kicker">基础设置</div>
+      <div class="cat-settings-grid">
+        <label class="cat-setting cat-setting-name">
+          <span>分类名称</span>
+          <input id="cat-name-input" class="field" value="${esc(c.name)}" placeholder="分类名称">
+        </label>
+        <label class="cat-setting cat-setting-focus">
+          <span>总体关注点 <em>用于指导整份纪要</em></span>
+          <textarea id="cat-prompt-input" class="edit-ta cat-prompt-main" rows="2" placeholder="例如：关注项目进展、关键决策和下一步行动…">${esc(c.prompt)}</textarea>
+        </label>
+      </div>
+    </div>
+    <div class="cat-section-panel">
+      <div class="cat-section-head">
+        <div>
+          <div class="cat-section-heading">章节结构 <span class="cat-section-total">${sections.length} 个章节</span></div>
+          <div class="cat-section-help">AI 将按下列顺序生成纪要</div>
+        </div>
+        <button id="cat-section-add" class="btn btn-ghost btn-sm">＋ 添加章节</button>
+      </div>
+      <div class="cat-section-table-wrap">
+        <table class="cat-section-table">
+          <thead><tr><th>#</th><th>章节名称</th><th>章节指令 Prompt</th><th>排序</th><th></th></tr></thead>
+          <tbody>
+            ${sections.length ? sections.map((section, i) => `
+              <tr class="cat-section" data-i="${i}">
+                <td><span class="cat-section-index">${i + 1}</span></td>
+                <td><input id="cat-section-title-${i}" class="cat-cell-input cat-section-title" value="${esc(section.title)}" placeholder="如：客户信息"></td>
+                <td><textarea id="cat-section-prompt-${i}" class="cat-cell-input cat-section-prompt" rows="1" placeholder="说明本章需要提取什么、如何组织…">${esc(section.prompt || "")}</textarea></td>
+                <td><div class="cat-section-actions">
+                  <button class="cat-icon-btn section-move-up" title="上移"${i === 0 ? " disabled" : ""}>↑</button>
+                  <button class="cat-icon-btn section-move-down" title="下移"${i === sections.length - 1 ? " disabled" : ""}>↓</button>
+                </div></td>
+                <td><button class="cat-icon-btn cat-icon-danger section-del" title="删除章节">×</button></td>
+              </tr>`).join("") : `<tr><td colspan="5" class="tags-empty cat-section-empty">暂无章节，添加一个章节开始配置</td></tr>`}
+          </tbody>
+        </table>
+      </div>
     </div>`;
   el("#cat-name-input").addEventListener("input", () => {
     catDraft[catSel].name = el("#cat-name-input").value;
     renderCatLeft();
   });
+  el("#cat-section-add").addEventListener("click", () => {
+    flushCatRight();
+    catDraft[catSel].sections.push({ id: newSectionId(), title: "新章节", prompt: "" });
+    renderCatLeft();
+    renderCatRight();
+    const input = el(`#cat-section-title-${catDraft[catSel].sections.length - 1}`);
+    if (input) { input.focus(); input.select(); }
+  });
+  box.querySelectorAll(".section-del").forEach((button) => button.addEventListener("click", () => {
+    flushCatRight();
+    catDraft[catSel].sections.splice(+button.closest(".cat-section").dataset.i, 1);
+    renderCatLeft();
+    renderCatRight();
+  }));
+  box.querySelectorAll(".section-move-up, .section-move-down").forEach((button) => button.addEventListener("click", () => {
+    flushCatRight();
+    const i = +button.closest(".cat-section").dataset.i;
+    const target = button.classList.contains("section-move-up") ? i - 1 : i + 1;
+    if (target < 0 || target >= catDraft[catSel].sections.length) return;
+    [catDraft[catSel].sections[i], catDraft[catSel].sections[target]] =
+      [catDraft[catSel].sections[target], catDraft[catSel].sections[i]];
+    renderCatRight();
+  }));
 }
 
 async function saveCategories() {
@@ -247,11 +310,11 @@ async function saveCategories() {
     .map((c) => ({
       name: (c.name || "").trim(),
       prompt: (c.prompt || "").trim(),
-      requirements: Object.fromEntries(
-        CATEGORY_REQUIREMENT_FIELDS
-          .map(([key]) => [key, ((c.requirements || {})[key] || "").trim()])
-          .filter(([, value]) => value)
-      ),
+      sections: (c.sections || []).map((s) => ({
+        id: s.id || newSectionId(),
+        title: (s.title || "").trim(),
+        prompt: (s.prompt || "").trim(),
+      })).filter((s) => s.title),
     }))
     .filter((c) => c.name);
   const btn = el("#cat-save");
@@ -271,12 +334,11 @@ async function saveCategories() {
 }
 
 el("#btn-category-open").addEventListener("click", openCategoryModal);
-el("#cat-close").addEventListener("click", closeCategoryModal);
 el("#cat-cancel").addEventListener("click", closeCategoryModal);
 el("#cat-save").addEventListener("click", saveCategories);
 el("#cat-add").addEventListener("click", () => {
   flushCatRight();
-  catDraft.push({ name: "新分类", prompt: "", requirements: {} });
+  catDraft.push({ name: "新分类", prompt: "", sections: defaultCategorySections() });
   catSel = catDraft.length - 1;
   renderCatModal();
   const ni = el("#cat-name-input"); if (ni) { ni.focus(); ni.select(); }
@@ -987,6 +1049,16 @@ function renderSummary(sum) {
     `<span class="editable" data-path="${path}"${ml ? ' data-multiline="1"' : ""} title="双击编辑">${html}</span>`;
   const srcEd = (path, ts) =>
     `<span class="editable" data-path="${path}" data-unset="1" title="双击编辑出处时间">${srcTag(ts)}</span>`;
+  if (sum.sections?.length) {
+    const sectionContent = (value) => esc(value || "未提及")
+      .replace(/\[(\d{2}:\d{2}:\d{2})\]/g, (_, ts) => srcTag(ts));
+    el("#summary-body").innerHTML = sum.sections.map((section, i) => `
+      <div class="sum-block sum-dynamic-section">
+        <h4>${esc(section.title)}</h4>
+        ${ed(`sections.${i}.content`, `<span class="section-content">${sectionContent(section.content)}</span>`, true)}
+      </div>`).join("");
+    return;
+  }
   const blocks = [`<div class="sum-summary">${ed("summary", esc(sum.summary) || '<span class="unset">（双击添加摘要）</span>', true)}</div>`];
   if (sum.topics?.length) blocks.push(listBlock("关键讨论点",
     sum.topics.map((t, i) => `${ed(`topics.${i}.title`, "<b>" + esc(t.title) + "</b>")}：${ed(`topics.${i}.summary`, esc(t.summary), true)} ${srcEd(`topics.${i}.source_time`, t.source_time)}`)));
@@ -1003,6 +1075,7 @@ function listBlock(title, items) {
 }
 
 function renderTodos(todos) {
+  el("#todos-card").hidden = Boolean(currentSummary?.sections?.length);
   todos = todos || [];
   const addBtn = `<button id="todo-add" class="btn btn-secondary btn-sm" style="margin-top:10px">+ 添加一行</button>`;
   if (!todos.length) {

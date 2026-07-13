@@ -86,7 +86,7 @@
             <div id="summary-body"></div>
           </section>
         </div>
-        <section class="card">
+        <section id="todos-card" class="card">
           <div class="card-title">待办事项
             <span class="card-title-sub">双击单元格可编辑</span>
           </div>
@@ -121,25 +121,19 @@
 
 <!-- ============ 分类库弹窗 ============ -->
 <div id="category-modal" class="modal-mask" hidden>
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title">分类库 <span class="card-title-sub">每个分类带关注重点和字段要求</span></div>
-      <button id="cat-close" class="modal-close" title="关闭">×</button>
-    </div>
-    <div class="modal-sub">
-      分类决定生成纪要时的关注重点（Prompt）和各字段的输出要求。左边选分类，右边编辑配置；
-      给某条录音换分类时会问你是否按新分类重新生成纪要。
-    </div>
+  <div class="modal category-modal-window">
     <div class="cat-layout">
       <div class="cat-left">
         <div id="cat-left-list" class="cat-left-list"></div>
-        <button id="cat-add" class="btn btn-secondary btn-sm cat-add-btn">＋ 新增分类</button>
+        <div class="cat-left-actions">
+          <button id="cat-add" class="btn btn-secondary btn-sm cat-add-btn">＋ 新增</button>
+          <button id="cat-del" class="btn btn-danger-ghost btn-sm">删除</button>
+        </div>
       </div>
       <div id="cat-right" class="cat-right"></div>
     </div>
     <div class="modal-footer">
-      <button id="cat-del" class="btn btn-danger-ghost btn-sm">删除当前分类</button>
-      <div style="flex:1"></div>
+      <div class="cat-footer-tip">修改仅影响之后重新生成的纪要</div>
       <button id="cat-cancel" class="btn btn-secondary btn-sm">取消</button>
       <button id="cat-save" class="btn btn-primary btn-sm">保存</button>
     </div>

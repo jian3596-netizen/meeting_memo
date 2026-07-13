@@ -32,6 +32,8 @@ def summary_to_text(summary: Optional[MeetingSummary]) -> str:
         summary.title or "",
         summary.summary or "",
     ]
+    for section in summary.sections or []:
+        parts.extend([section.title or "", section.content or ""])
     for item in summary.topics or []:
         parts.extend([item.title or "", item.summary or ""])
     for item in summary.decisions or []:

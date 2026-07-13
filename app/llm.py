@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from . import config, templates_prompts
-from .models import MeetingSummary, Segment
+from .models import MeetingSummary, Segment, SummarySection
 from .textproc import chunk_transcript, transcript_to_text
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
@@ -52,11 +52,25 @@ class OpenAICompatLLM:
         resp = self._client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
 
-    def _chat_to_summary(self, messages: List[dict]) -> MeetingSummary:
+    def _chat_to_summary(
+        self, messages: List[dict], sections: Optional[List[Dict[str, str]]] = None
+    ) -> MeetingSummary:
         for attempt in range(2):
             raw = self._chat(messages, json_mode=True)
             try:
-                return MeetingSummary.model_validate(_extract_json(raw))
+                summary = MeetingSummary.model_validate(_extract_json(raw))
+                if sections is not None:
+                    returned = {s.id: s for s in summary.sections}
+                    summary.sections = [
+                        SummarySection(
+                            id=configured["id"],
+                            title=configured["title"],
+                            content=(returned[configured["id"]].content
+                                     if configured["id"] in returned else "未提及"),
+                        )
+                        for configured in sections
+                    ]
+                return summary
             except Exception:
                 if attempt == 0:
                     messages = messages + [{
@@ -68,14 +82,15 @@ class OpenAICompatLLM:
 
     def summarize(
         self, segments: List[Segment], cat_name: str, cat_focus: str,
+        sections: Optional[List[Dict[str, str]]] = None,
         custom_instruction: Optional[str] = None,
     ) -> MeetingSummary:
         text = transcript_to_text(segments, use_clean=True)
         if len(text) <= config.LLM_SINGLE_PASS_MAX_CHARS:
             messages = templates_prompts.build_summary_messages(
-                text, cat_name, cat_focus, custom_instruction
+                text, cat_name, cat_focus, sections, custom_instruction
             )
-            return self._chat_to_summary(messages)
+            return self._chat_to_summary(messages, sections)
 
         # map-reduce
         chunks = chunk_transcript(segments)
@@ -88,7 +103,10 @@ class OpenAICompatLLM:
             notes_parts.append(f"[片段{i} {ch['start']}~{ch['end']}]\n{note}")
         notes = "\n\n".join(notes_parts)
         return self._chat_to_summary(
-            templates_prompts.build_reduce_messages(notes, cat_name, cat_focus, custom_instruction)
+            templates_prompts.build_reduce_messages(
+                notes, cat_name, cat_focus, sections, custom_instruction
+            ),
+            sections,
         )
 
 
