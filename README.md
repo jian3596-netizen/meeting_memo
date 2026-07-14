@@ -120,7 +120,7 @@ AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽�
 
 规则启用策略偏保守：
 
-- 每次保存纪要都会记录一条 `correction_events` 编辑事件。
+- 新前端会按实际编辑字段提交修改前后文本，并记录一条 `correction_events` 编辑事件；旧客户端仍兼容整份纪要比较。
 - 只抽取短文本替换候选，避免把整句润色、删减、结构调整误当成 ASR 纠错。
 - 同一条 `wrong_text -> correct_text` 累计出现 3 次后自动启用。
 - 已启用规则会在新会议清洗转写后本地应用，不额外消耗 LLM token。
@@ -150,7 +150,7 @@ AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽�
 | GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
 | GET | `/api/categories` ｜ PUT | 分类库（名称 + 总结 Prompt + 有序章节及章节 Prompt）读取 / 保存 |
 | GET | `/api/hotwords` ｜ PUT | 热词词库 读取 / 保存 |
-| GET | `/api/corrections` | 查看自动沉淀的纠错规则 |
+| GET | `/api/corrections` | 查看自动沉淀的纠错规则（前端「纠错库」表格） |
 | GET | `/api/voiceprints` | 声纹库列表 |
 | DELETE | `/api/voiceprints?name=` | 删除某人全部声纹模板 |
 | POST | `/api/meetings/{id}/voiceprints` | 从该会议某说话人注册声纹（body：speaker + name） |
@@ -172,6 +172,7 @@ AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽�
 - pdf 导出暂未实现（先 md/docx）。
 - Windows 上已通过 `KMP_DUPLICATE_LIB_OK=TRUE`（在 `app/config.py` 自动设置）规避 OpenMP 冲突。
 - 分类（自定义纪要结构）：内置 通用 / 项目 / 客户拜访 / 技术评审 / 日常记录 / 例会；可在「分类库」里增删分类，并为每个分类新增、删除、排序纪要章节及维护各章节 Prompt。换某条录音的分类后可按新结构重新生成纪要。
+- 个例背景：上传录音时可填写描述 / 背景信息；系统会保存到会议描述，并在首次生成及重新生成纪要时作为辅助背景加入 Prompt（纪要事实仍以转写为准）。
 
 ## 自测脚本
 

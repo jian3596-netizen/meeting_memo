@@ -11,6 +11,7 @@ let currentSummary = null;
 let allMeetings = [];
 let activeTagFilter = new Set();
 let queuePollTimer = null;
+let correctionRules = [];
 
 const STATUS_LABEL = {
   uploaded: "已上传，排队中",
@@ -637,6 +638,7 @@ el("#upload-form").addEventListener("submit", async (e) => {
   const files = [...el("#file").files];
   if (!files.length) { el("#upload-msg").textContent = "请先选择文件"; return; }
   const cat = el("#upload-category").value;
+  const description = el("#upload-description").value.trim();
   const btn = el("#upload-btn");
   btn.disabled = true;
   let firstId = null, ok = 0;
@@ -646,6 +648,7 @@ el("#upload-form").addEventListener("submit", async (e) => {
     const fd = new FormData();
     fd.append("file", files[i]);
     if (cat) fd.append("category", cat);
+    if (description) fd.append("description", description);
     const spkEl = el(`.up-spk[data-i="${i}"]`);
     const spk = spkEl ? parseInt(spkEl.value, 10) : NaN;
     if (spk > 0) fd.append("spk_num", String(spk));
@@ -661,6 +664,7 @@ el("#upload-form").addEventListener("submit", async (e) => {
   el("#file").value = "";
   el("#file-name").textContent = "点击选择音频 / 视频文件（可多选）";
   el("#file-label").classList.remove("has-file");
+  el("#upload-description").value = "";
   renderUploadList();
   if (fails.length) {
     el("#upload-msg").textContent = `成功 ${ok} 个，失败 ${fails.length} 个：${fails.join("；")}`;
@@ -982,10 +986,10 @@ function setByPath(obj, path, val) {
   ks.reduce((o, k) => o[k], obj)[last] = val;
 }
 
-async function saveSummary() {
+async function saveSummary(edit = null) {
   await api(`/api/meetings/${currentId}/summary`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(currentSummary),
+    body: JSON.stringify({ summary: currentSummary, edit }),
   });
 }
 
@@ -1035,8 +1039,10 @@ function bindInlineEditing(containerSel, rerender) {
     const cur = getByPath(currentSummary, path);
     const prefill = (cur == null || cur === "未明确") ? "" : String(cur);
     inlineEdit(t, prefill, multiline, async (nv) => {
-      setByPath(currentSummary, path, nv || (unset ? "未明确" : ""));
-      await saveSummary();
+      const beforeText = cur == null ? "" : String(cur);
+      const afterText = nv || (unset ? "未明确" : "");
+      setByPath(currentSummary, path, afterText);
+      await saveSummary({ path, before_text: beforeText, after_text: afterText });
       rerender();
       if (path === "title") { el("#m-title").textContent = currentSummary.title; loadLibrary(); }
     });
@@ -1144,12 +1150,88 @@ bindInlineEditing("#summary-body", () => renderSummary(currentSummary));
 bindInlineEditing("#todos-body", () => renderTodos(currentSummary?.todos || []));
 el("#m-title").addEventListener("dblclick", () => {
   if (!currentSummary) return;
-  inlineEdit(el("#m-title"), el("#m-title").textContent, false, async (nv) => {
+  const oldTitle = currentSummary.title;
+  inlineEdit(el("#m-title"), oldTitle, false, async (nv) => {
     currentSummary.title = nv || currentSummary.title;
-    await saveSummary();
+    await saveSummary({ path: "title", before_text: oldTitle, after_text: currentSummary.title });
     el("#m-title").textContent = currentSummary.title;
     loadLibrary();
   });
+});
+
+// ---------- 纠错库 ----------
+function fmtConfidence(value) {
+  const n = Number(value || 0);
+  return `${Math.round(n * 100)}%`;
+}
+function renderCorrections() {
+  const enabled = correctionRules.filter((r) => Number(r.enabled) === 1).length;
+  el("#correction-summary").innerHTML = `
+    <div class="correction-stats">
+      <span class="correction-stat"><b>${correctionRules.length}</b> 条规则</span>
+      <span class="correction-stat enabled"><b>${enabled}</b> 条已启用</span>
+    </div>
+    <div class="correction-hint">同一替换累计出现 3 次后自动启用，也可手动启用</div>`;
+  el("#correction-body").innerHTML = correctionRules.length
+    ? correctionRules.map((r) => `<tr data-rule-id="${esc(r.id)}">
+        <td><input type="text" data-field="wrong_text" value="${esc(r.wrong_text)}" aria-label="错误文本"></td>
+        <td><input type="text" data-field="correct_text" value="${esc(r.correct_text)}" aria-label="正确文本"></td>
+        <td>${Number(r.hit_count || 0)}</td>
+        <td>${fmtConfidence(r.confidence)}</td>
+        <td><label class="correction-switch" title="启用后会应用于后续生成的纪要"><input type="checkbox" data-field="enabled" aria-label="启用规则" ${Number(r.enabled) === 1 ? "checked" : ""}><span></span></label></td>
+        <td>${esc(String(r.updated_at || r.created_at || "").replace("T", " ").slice(0, 19))}</td>
+        <td><div class="correction-actions"><button class="btn btn-secondary btn-sm" data-action="save">保存</button><button class="cat-icon-btn cat-icon-danger" data-action="delete" title="删除规则" aria-label="删除规则">×</button></div></td>
+      </tr>`).join("")
+    : `<tr><td colspan="7" class="correction-empty"><div class="correction-empty-icon">✓</div><div class="correction-empty-title">暂无纠错规则</div><div class="correction-empty-sub">编辑纪要中的错词后，候选规则会自动沉淀在这里</div></td></tr>`;
+}
+async function saveCorrectionRule(row) {
+  const id = row.dataset.ruleId;
+  const payload = {
+    wrong_text: row.querySelector('[data-field="wrong_text"]').value.trim(),
+    correct_text: row.querySelector('[data-field="correct_text"]').value.trim(),
+    enabled: row.querySelector('[data-field="enabled"]').checked,
+  };
+  const data = await api(`/api/corrections/${encodeURIComponent(id)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  correctionRules = correctionRules.map((r) => r.id === id ? data.rule : r);
+  renderCorrections();
+}
+async function deleteCorrectionRule(row) {
+  const id = row.dataset.ruleId;
+  if (!confirm("确定删除这条纠错规则吗？")) return;
+  await api(`/api/corrections/${encodeURIComponent(id)}`, { method: "DELETE" });
+  correctionRules = correctionRules.filter((r) => r.id !== id);
+  renderCorrections();
+}
+async function openCorrectionModal() {
+  el("#correction-summary").textContent = "加载中…";
+  el("#correction-body").innerHTML = "";
+  el("#correction-modal").hidden = false;
+  try {
+    const data = await api("/api/corrections");
+    correctionRules = data.rules || [];
+    renderCorrections();
+  } catch (e) {
+    el("#correction-summary").textContent = `加载失败：${e.message}`;
+  }
+}
+function closeCorrectionModal() { el("#correction-modal").hidden = true; }
+el("#btn-correction-open").addEventListener("click", openCorrectionModal);
+el("#correction-close").addEventListener("click", closeCorrectionModal);
+el("#correction-modal").addEventListener("click", (e) => { if (e.target.id === "correction-modal") closeCorrectionModal(); });
+el("#correction-body").addEventListener("click", async (e) => {
+  const button = e.target.closest("[data-action]");
+  const row = button?.closest("[data-rule-id]");
+  if (!button || !row) return;
+  button.disabled = true;
+  try {
+    if (button.dataset.action === "save") await saveCorrectionRule(row);
+    else if (button.dataset.action === "delete") await deleteCorrectionRule(row);
+  } catch (err) {
+    alert(`${button.dataset.action === "save" ? "保存" : "删除"}失败：${err.message}`);
+    button.disabled = false;
+  }
 });
 
 // ---------- 全局 Esc 关闭弹窗 / 抽屉 ----------
@@ -1161,6 +1243,7 @@ document.addEventListener("keydown", (e) => {
   else if (!el("#upload-modal").hidden) closeUploadModal();
   else if (!el("#queue-modal").hidden) el("#queue-modal").hidden = true;
   else if (!el("#voiceprint-modal").hidden) el("#voiceprint-modal").hidden = true;
+  else if (!el("#correction-modal").hidden) closeCorrectionModal();
 });
 
 // ---------- init ----------

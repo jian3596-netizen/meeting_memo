@@ -137,8 +137,14 @@ def _section_instruction(sections: Optional[List[Dict[str, str]]]) -> str:
 def _instruction_block(
     name: str, focus: str, sections: Optional[List[Dict[str, str]]],
     custom_instruction: Optional[str] = None,
+    meeting_description: Optional[str] = None,
 ) -> str:
     block = f"本次会议类型：{name or DEFAULT_CATEGORY_NAME}。{focus or DEFAULT_CATEGORY_FOCUS}"
+    if meeting_description and meeting_description.strip():
+        block += (
+            "\n\n用户提供的会议背景（仅用于辅助理解，不得替代转写证据）：\n"
+            f"{meeting_description.strip()}"
+        )
     block += f"\n\n{_section_instruction(sections)}"
     if custom_instruction:
         block += f"\n\n补充要求：\n{custom_instruction.strip()}"
@@ -149,9 +155,10 @@ def build_summary_messages(
     transcript_text: str, name: str, focus: str,
     sections: Optional[List[Dict[str, str]]] = None,
     custom_instruction: Optional[str] = None,
+    meeting_description: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     user = (
-        f"{_instruction_block(name, focus, sections, custom_instruction)}\n\n"
+        f"{_instruction_block(name, focus, sections, custom_instruction, meeting_description)}\n\n"
         f"以下是带时间戳和说话人的会议转写，请据此生成结构化纪要 JSON：\n\n"
         f"=== 会议转写开始 ===\n{transcript_text}\n=== 会议转写结束 ==="
     )
@@ -162,11 +169,20 @@ def build_summary_messages(
 
 
 # ---- 长会议 map-reduce ----
-def build_map_messages(chunk_text: str, idx: int, total: int) -> List[Dict[str, str]]:
+def build_map_messages(
+    chunk_text: str, idx: int, total: int,
+    meeting_description: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    background = ""
+    if meeting_description and meeting_description.strip():
+        background = (
+            "\n用户提供的会议背景（仅用于辅助理解，不得替代转写证据）：\n"
+            f"{meeting_description.strip()}\n"
+        )
     user = (
         f"这是一场长会议的第 {idx}/{total} 段转写。请提炼要点笔记，"
         f"每条要点保留最相关那句的 [HH:MM:SS] 时间戳，覆盖：讨论点、决策、待办（含负责人/截止）、"
-        f"风险、未决问题。用简洁中文 bullet，不要编造。\n\n"
+        f"风险、未决问题。用简洁中文 bullet，不要编造。\n{background}\n"
         f"=== 转写片段开始 ===\n{chunk_text}\n=== 转写片段结束 ==="
     )
     return [
@@ -179,9 +195,10 @@ def build_reduce_messages(
     notes: str, name: str, focus: str,
     sections: Optional[List[Dict[str, str]]] = None,
     custom_instruction: Optional[str] = None,
+    meeting_description: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     user = (
-        f"{_instruction_block(name, focus, sections, custom_instruction)}\n\n"
+        f"{_instruction_block(name, focus, sections, custom_instruction, meeting_description)}\n\n"
         f"以下是同一场会议各片段的要点笔记（已带时间戳），请合并去重，生成最终结构化纪要 JSON：\n\n"
         f"=== 要点笔记开始 ===\n{notes}\n=== 要点笔记结束 ==="
     )

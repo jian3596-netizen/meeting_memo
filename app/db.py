@@ -414,6 +414,38 @@ def list_correction_rules(limit: int = 200) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def update_correction_rule(
+    rule_id: str, wrong_text: str, correct_text: str, enabled: bool
+) -> Optional[Dict[str, Any]]:
+    with closing(get_conn()) as conn:
+        row = conn.execute(
+            "SELECT id FROM correction_rules WHERE id=?", (rule_id,)
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            conn.execute(
+                """UPDATE correction_rules
+                   SET wrong_text=?, correct_text=?, enabled=?, updated_at=?
+                   WHERE id=?""",
+                (wrong_text.strip(), correct_text.strip(), int(enabled), _now(), rule_id),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("duplicate correction rule") from exc
+        updated = conn.execute(
+            "SELECT * FROM correction_rules WHERE id=?", (rule_id,)
+        ).fetchone()
+    return dict(updated) if updated else None
+
+
+def delete_correction_rule(rule_id: str) -> bool:
+    with closing(get_conn()) as conn:
+        cursor = conn.execute("DELETE FROM correction_rules WHERE id=?", (rule_id,))
+        conn.commit()
+    return cursor.rowcount > 0
+
+
 def _json_list(raw: Any) -> List[Any]:
     try:
         data = json.loads(raw or "[]")

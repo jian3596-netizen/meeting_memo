@@ -25,6 +25,19 @@ class DynamicSectionsTest(unittest.TestCase):
         self.assertIn('"id": "customer_info"', user_prompt)
         self.assertNotIn('"id": "risks"', user_prompt)
 
+    def test_meeting_description_is_added_as_non_evidence_background(self) -> None:
+        messages = templates_prompts.build_summary_messages(
+            "[00:00:01] 客户：我们需要缩短交付时间。",
+            "客户拜访",
+            "关注客户情况",
+            CUSTOMER_SECTIONS,
+            meeting_description="首次拜访甲公司，联系人为采购负责人。",
+        )
+        user_prompt = messages[-1]["content"]
+
+        self.assertIn("首次拜访甲公司", user_prompt)
+        self.assertIn("仅用于辅助理解，不得替代转写证据", user_prompt)
+
     def test_llm_result_is_aligned_to_category_configuration(self) -> None:
         llm = OpenAICompatLLM.__new__(OpenAICompatLLM)
         llm._chat = lambda messages, json_mode=True: """{

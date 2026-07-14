@@ -23,6 +23,7 @@
       <button id="btn-category-open" class="btn btn-secondary btn-sm">分类库</button>
       <button id="btn-hotword-open" class="btn btn-secondary btn-sm">热词</button>
       <button id="btn-voiceprint-open" class="btn btn-secondary btn-sm">声纹库</button>
+      <button id="btn-correction-open" class="btn btn-secondary btn-sm">纠错库</button>
     </div>
   </header>
 
@@ -113,6 +114,8 @@
       <div id="upload-list" class="upload-list" hidden></div>
       <label class="edit-label" style="margin-top:12px;display:block">分类（决定总结 Prompt）</label>
       <select id="upload-category" class="field" style="margin-top:4px"></select>
+      <label class="edit-label" style="margin-top:12px;display:block">描述 / 背景信息 <span class="card-title-sub">会加入 AI Prompt</span></label>
+      <textarea id="upload-description" class="edit-ta upload-description" rows="3" placeholder="例如：这是对某客户的首次拜访，重点了解现有方案、采购计划和关键联系人…"></textarea>
       <button type="submit" id="upload-btn" class="btn btn-primary btn-block" style="margin-top:12px">上传并处理</button>
       <div id="upload-msg" class="hint">说话人数留空＝自动估计；知道几个人就填上，长录音更不易把多人并成一个。</div>
     </form>
@@ -162,6 +165,26 @@
       在会议详情里给说话人填名字后点「存声纹」，以后新上传的会议会自动识别。一个人可保存多份模板（不同设备/来源）。
     </div>
     <div id="voiceprint-list" class="tags"></div>
+  </div>
+</div>
+
+<!-- ============ 纠错库弹窗 ============ -->
+<div id="correction-modal" class="modal-mask" hidden>
+  <div class="modal correction-modal-window">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">纠错库</div>
+        <div class="category-title-sub">从纪要人工编辑中自动沉淀的术语替换规则</div>
+      </div>
+      <button id="correction-close" class="modal-close" title="关闭">×</button>
+    </div>
+    <div class="correction-summary" id="correction-summary"></div>
+    <div class="correction-table-wrap">
+      <table class="correction-table">
+        <thead><tr><th>错误文本</th><th>正确文本</th><th>累计</th><th>置信度</th><th>启用</th><th>更新时间</th><th>操作</th></tr></thead>
+        <tbody id="correction-body"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 

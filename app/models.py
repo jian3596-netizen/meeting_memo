@@ -75,6 +75,23 @@ class MeetingSummary(BaseModel):
     open_questions: List[OpenQuestion] = Field(default_factory=list)
 
 
+class SummaryEdit(BaseModel):
+    path: str
+    before_text: str = ""
+    after_text: str = ""
+
+
+class SummaryUpdateRequest(BaseModel):
+    summary: MeetingSummary
+    edit: Optional[SummaryEdit] = None
+
+
+class CorrectionRuleUpdate(BaseModel):
+    wrong_text: str
+    correct_text: str
+    enabled: bool = False
+
+
 # ---------- API ----------
 class CreateMeetingResponse(BaseModel):
     meeting_id: str

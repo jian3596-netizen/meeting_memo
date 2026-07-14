@@ -10,7 +10,7 @@ import shutil
 import threading
 import traceback
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -20,11 +20,13 @@ from fastapi.staticfiles import StaticFiles
 from . import config, corrections, db, export, pipeline
 from .models import (
     CategoriesRequest,
+    CorrectionRuleUpdate,
     CreateMeetingResponse,
     HotwordsRequest,
     MeetingMetaRequest,
     MeetingSummary,
     RegenerateRequest,
+    SummaryUpdateRequest,
     StatusResponse,
     VoiceprintEnrollRequest,
 )
@@ -114,6 +116,7 @@ def index() -> HTMLResponse:
 async def create_meeting(
     file: UploadFile = File(...),
     category: str = Form(""),
+    description: str = Form(""),
     spk_num: int = Form(0),
 ) -> CreateMeetingResponse:
     ext = Path(file.filename or "").suffix.lower()
@@ -143,6 +146,8 @@ async def create_meeting(
     fields = {"audio_path": str(dest)}
     if category.strip():
         fields["category"] = category.strip()   # 分类决定总结 Prompt
+    if description.strip():
+        fields["description"] = description.strip()  # 个例背景会加入总结 Prompt
     if spk_num and spk_num > 0:
         fields["spk_num"] = spk_num   # 指定说话人数，避免长音频"少分"
     db.update_meeting(mid, **fields)
@@ -358,8 +363,13 @@ def get_summary(mid: str) -> Dict:
 
 
 @app.put("/api/meetings/{mid}/summary")
-def update_summary(mid: str, summary: MeetingSummary) -> Dict:
+def update_summary(
+    mid: str, payload: Union[SummaryUpdateRequest, MeetingSummary]
+) -> Dict:
     _require(mid)
+    wrapped = isinstance(payload, SummaryUpdateRequest)
+    summary = payload.summary if wrapped else payload
+    edit = payload.edit if wrapped else None
     previous = pipeline.load_summary(mid)
     segs = pipeline.load_segments(mid)
     meeting = db.get_meeting(mid) or {}
@@ -370,9 +380,19 @@ def update_summary(mid: str, summary: MeetingSummary) -> Dict:
     learned = []
     try:
         protected_terms = _summary_correction_protected_terms(mid, meeting, segs)
-        learned = corrections.learn_from_summary_edit(
-            mid, previous, summary, protected_terms=protected_terms
-        )
+        if edit:
+            learned = corrections.learn_from_text_edit(
+                mid,
+                edit.before_text,
+                edit.after_text,
+                edit_path=edit.path,
+                protected_terms=protected_terms,
+            )
+        elif not wrapped:
+            # 兼容 v1.2 客户端：直接提交整份 MeetingSummary 时仍走全量比较。
+            learned = corrections.learn_from_summary_edit(
+                mid, previous, summary, protected_terms=protected_terms
+            )
     except Exception:  # noqa: BLE001 矫正规则沉淀失败不应影响纪要保存
         traceback.print_exc()
     return {"ok": True, "corrections_learned": learned}
@@ -381,6 +401,30 @@ def update_summary(mid: str, summary: MeetingSummary) -> Dict:
 @app.get("/api/corrections")
 def get_corrections() -> Dict:
     return {"rules": db.list_correction_rules()}
+
+
+@app.put("/api/corrections/{rule_id}")
+def update_correction(rule_id: str, req: CorrectionRuleUpdate) -> Dict:
+    wrong_text = req.wrong_text.strip()
+    correct_text = req.correct_text.strip()
+    if not wrong_text or not correct_text:
+        raise HTTPException(400, "错误文本和正确文本不能为空")
+    if wrong_text == correct_text:
+        raise HTTPException(400, "错误文本和正确文本不能相同")
+    try:
+        rule = db.update_correction_rule(rule_id, wrong_text, correct_text, req.enabled)
+    except ValueError as exc:
+        raise HTTPException(409, "相同的纠错规则已经存在") from exc
+    if not rule:
+        raise HTTPException(404, "纠错规则不存在")
+    return {"rule": rule}
+
+
+@app.delete("/api/corrections/{rule_id}")
+def delete_correction(rule_id: str) -> Dict:
+    if not db.delete_correction_rule(rule_id):
+        raise HTTPException(404, "纠错规则不存在")
+    return {"ok": True}
 
 
 # ---------------- 重新生成（7.5） ----------------

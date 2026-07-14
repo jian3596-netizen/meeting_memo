@@ -55,6 +55,23 @@ def learn_from_summary_edit(
 ) -> List[Dict[str, Any]]:
     before_text = summary_to_text(before)
     after_text = summary_to_text(after)
+    return learn_from_text_edit(
+        meeting_id,
+        before_text,
+        after_text,
+        protected_terms=protected_terms,
+    )
+
+
+def learn_from_text_edit(
+    meeting_id: str,
+    before_text: str,
+    after_text: str,
+    *,
+    edit_path: Optional[str] = None,
+    protected_terms: Optional[Iterable[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Learn correction candidates from one concrete edited field."""
     if not before_text or before_text == after_text:
         return []
 
@@ -77,6 +94,7 @@ def learn_from_summary_edit(
             auto_enable_hits=AUTO_ENABLE_HITS,
             example={
                 "meeting_id": meeting_id,
+                "edit_path": edit_path or "",
                 "before": c["wrong_text"],
                 "after": c["correct_text"],
             },

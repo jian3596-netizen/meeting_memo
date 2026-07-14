@@ -84,11 +84,12 @@ class OpenAICompatLLM:
         self, segments: List[Segment], cat_name: str, cat_focus: str,
         sections: Optional[List[Dict[str, str]]] = None,
         custom_instruction: Optional[str] = None,
+        meeting_description: Optional[str] = None,
     ) -> MeetingSummary:
         text = transcript_to_text(segments, use_clean=True)
         if len(text) <= config.LLM_SINGLE_PASS_MAX_CHARS:
             messages = templates_prompts.build_summary_messages(
-                text, cat_name, cat_focus, sections, custom_instruction
+                text, cat_name, cat_focus, sections, custom_instruction, meeting_description
             )
             return self._chat_to_summary(messages, sections)
 
@@ -97,14 +98,16 @@ class OpenAICompatLLM:
         notes_parts = []
         for i, ch in enumerate(chunks, 1):
             note = self._chat(
-                templates_prompts.build_map_messages(ch["text"], i, len(chunks)),
+                templates_prompts.build_map_messages(
+                    ch["text"], i, len(chunks), meeting_description
+                ),
                 json_mode=False,
             )
             notes_parts.append(f"[片段{i} {ch['start']}~{ch['end']}]\n{note}")
         notes = "\n\n".join(notes_parts)
         return self._chat_to_summary(
             templates_prompts.build_reduce_messages(
-                notes, cat_name, cat_focus, sections, custom_instruction
+                notes, cat_name, cat_focus, sections, custom_instruction, meeting_description
             ),
             sections,
         )

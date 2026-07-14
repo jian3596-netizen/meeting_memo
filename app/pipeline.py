@@ -231,7 +231,13 @@ def process_meeting(mid: str) -> None:
         db.set_status(mid, "summarizing", 80)
         apply_speaker_map(segments, db.get_speaker_map(mid))
         cat_name, cat_focus, sections = _resolve_category(meeting.get("category"))
-        summary = get_llm().summarize(segments, cat_name, cat_focus, sections)
+        summary = get_llm().summarize(
+            segments,
+            cat_name,
+            cat_focus,
+            sections,
+            meeting_description=meeting.get("description"),
+        )
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)
 
@@ -292,6 +298,7 @@ def regenerate(mid: str, category: Optional[str], custom_instruction: Optional[s
             cat_focus,
             sections,
             custom_instruction,
+            meeting.get("description"),
         )
         _persist_summary(mid, summary, segments, config.LLM_MODEL)
         db.update_meeting(mid, title=summary.title)
