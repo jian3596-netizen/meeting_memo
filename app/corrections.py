@@ -3,8 +3,8 @@
 The correction library is intentionally conservative:
 - every summary save records the before/after text as an edit event;
 - short replace-like edits become candidate correction rules;
-- a rule is only auto-enabled after repeated hits;
-- enabled rules are applied locally to transcript clean_text before summarization.
+- every valid rule is active immediately;
+- rules are applied locally to transcript clean_text before summarization.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from typing import Any, Dict, Iterable, List, Optional
 from . import db
 from .models import MeetingSummary, Segment
 
-AUTO_ENABLE_HITS = 3
 MAX_CANDIDATES_PER_EDIT = 20
 MAX_RULES_PER_TEXT = 50
 _TRIM_CHARS = " \t\r\n，。！？；：、,.!?;:()（）[]【】\"'“”‘’"
@@ -91,7 +90,6 @@ def learn_from_text_edit(
             c["wrong_text"],
             c["correct_text"],
             confidence=c["confidence"],
-            auto_enable_hits=AUTO_ENABLE_HITS,
             example={
                 "meeting_id": meeting_id,
                 "edit_path": edit_path or "",

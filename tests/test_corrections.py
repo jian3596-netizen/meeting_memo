@@ -45,7 +45,7 @@ class ProtectedSpeakerTermsTest(unittest.TestCase):
             )
         )
 
-    def test_correction_rule_can_be_edited_enabled_and_deleted(self) -> None:
+    def test_correction_rule_can_be_edited_and_deleted(self) -> None:
         with TemporaryDirectory() as tmp:
             with patch.object(db.config, "DB_PATH", Path(tmp) / "test.db"):
                 db.init_db()
@@ -53,7 +53,7 @@ class ProtectedSpeakerTermsTest(unittest.TestCase):
                     "旧术语", "新术语", confidence=0.4, example={"meeting_id": "m1"}
                 )
                 updated = db.update_correction_rule(
-                    rule["id"], "错误术语", "正确术语", True
+                    rule["id"], "错误术语", "正确术语"
                 )
 
                 self.assertEqual(updated["wrong_text"], "错误术语")
@@ -61,6 +61,16 @@ class ProtectedSpeakerTermsTest(unittest.TestCase):
                 self.assertEqual(updated["enabled"], 1)
                 self.assertTrue(db.delete_correction_rule(rule["id"]))
                 self.assertEqual(db.list_correction_rules(), [])
+
+    def test_manual_correction_rule_is_active_immediately(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with patch.object(db.config, "DB_PATH", Path(tmp) / "test.db"):
+                db.init_db()
+                rule = db.create_correction_rule("阿莫希林", "阿莫西林")
+
+                self.assertEqual(rule["hit_count"], 0)
+                self.assertEqual(rule["enabled"], 1)
+                self.assertEqual(len(db.get_enabled_correction_rules()), 1)
 
     def test_case_insensitive_name_blocks_fragment_candidate(self) -> None:
         candidates = extract_candidates("JHONA reports", "JOHNA reports")

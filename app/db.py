@@ -145,6 +145,8 @@ def init_db() -> None:
         _migrate_voiceprints(conn)
         conn.executescript(SCHEMA)
         _migrate_meetings_meta(conn)
+        # v1.3.1: the correction library is now a fully active replacement table.
+        conn.execute("UPDATE correction_rules SET enabled=1 WHERE enabled<>1")
         conn.commit()
     _seed_categories_if_empty()
     _migrate_category_requirements_once()
@@ -334,7 +336,6 @@ def upsert_correction_rule(
     *,
     confidence: float,
     example: Dict[str, Any],
-    auto_enable_hits: int = 3,
 ) -> Dict[str, Any]:
     now = _now()
     wrong_text = wrong_text.strip()
@@ -350,9 +351,7 @@ def upsert_correction_rule(
             examples = examples[-5:]
             hit_count = int(row["hit_count"] or 0) + 1
             merged_conf = max(float(row["confidence"] or 0), confidence)
-            enabled = int(row["enabled"] or 0)
-            if not enabled and hit_count >= auto_enable_hits and merged_conf >= 0.25:
-                enabled = 1
+            enabled = 1
             conn.execute(
                 """UPDATE correction_rules
                    SET hit_count=?, confirmed_count=?, confidence=?, enabled=?,
@@ -365,7 +364,7 @@ def upsert_correction_rule(
             )
             rid = row["id"]
         else:
-            enabled = 1 if auto_enable_hits <= 1 and confidence >= 0.25 else 0
+            enabled = 1
             conn.execute(
                 """INSERT INTO correction_rules
                    (id, wrong_text, correct_text, hit_count, confirmed_count,
@@ -397,7 +396,7 @@ def get_enabled_correction_rules() -> List[Dict[str, Any]]:
     with closing(get_conn()) as conn:
         rows = conn.execute(
             """SELECT * FROM correction_rules
-               WHERE enabled=1 AND wrong_text<>'' AND correct_text<>''
+               WHERE wrong_text<>'' AND correct_text<>''
                ORDER BY LENGTH(wrong_text) DESC, hit_count DESC"""
         ).fetchall()
     return [dict(r) for r in rows]
@@ -407,15 +406,36 @@ def list_correction_rules(limit: int = 200) -> List[Dict[str, Any]]:
     with closing(get_conn()) as conn:
         rows = conn.execute(
             """SELECT * FROM correction_rules
-               ORDER BY enabled DESC, hit_count DESC, updated_at DESC
+               ORDER BY hit_count DESC, updated_at DESC
                LIMIT ?""",
             (int(limit),),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
+def create_correction_rule(wrong_text: str, correct_text: str) -> Dict[str, Any]:
+    now = _now()
+    rule_id = new_id()
+    with closing(get_conn()) as conn:
+        try:
+            conn.execute(
+                """INSERT INTO correction_rules
+                   (id, wrong_text, correct_text, hit_count, confirmed_count,
+                    rejected_count, confidence, enabled, examples, created_at, updated_at)
+                   VALUES (?, ?, ?, 0, 0, 0, 1, 1, '[]', ?, ?)""",
+                (rule_id, wrong_text.strip(), correct_text.strip(), now, now),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("duplicate correction rule") from exc
+        row = conn.execute(
+            "SELECT * FROM correction_rules WHERE id=?", (rule_id,)
+        ).fetchone()
+    return dict(row)
+
+
 def update_correction_rule(
-    rule_id: str, wrong_text: str, correct_text: str, enabled: bool
+    rule_id: str, wrong_text: str, correct_text: str
 ) -> Optional[Dict[str, Any]]:
     with closing(get_conn()) as conn:
         row = conn.execute(
@@ -428,7 +448,7 @@ def update_correction_rule(
                 """UPDATE correction_rules
                    SET wrong_text=?, correct_text=?, enabled=?, updated_at=?
                    WHERE id=?""",
-                (wrong_text.strip(), correct_text.strip(), int(enabled), _now(), rule_id),
+                (wrong_text.strip(), correct_text.strip(), 1, _now(), rule_id),
             )
             conn.commit()
         except sqlite3.IntegrityError as exc:

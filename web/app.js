@@ -12,6 +12,8 @@ let allMeetings = [];
 let activeTagFilter = new Set();
 let queuePollTimer = null;
 let correctionRules = [];
+let correctionDraft = false;
+const correctionSaveTimers = new WeakMap();
 
 const STATUS_LABEL = {
   uploaded: "已上传，排队中",
@@ -1160,41 +1162,55 @@ el("#m-title").addEventListener("dblclick", () => {
 });
 
 // ---------- 纠错库 ----------
-function fmtConfidence(value) {
-  const n = Number(value || 0);
-  return `${Math.round(n * 100)}%`;
-}
 function renderCorrections() {
-  const enabled = correctionRules.filter((r) => Number(r.enabled) === 1).length;
   el("#correction-summary").innerHTML = `
     <div class="correction-stats">
       <span class="correction-stat"><b>${correctionRules.length}</b> 条规则</span>
-      <span class="correction-stat enabled"><b>${enabled}</b> 条已启用</span>
     </div>
-    <div class="correction-hint">同一替换累计出现 3 次后自动启用，也可手动启用</div>`;
-  el("#correction-body").innerHTML = correctionRules.length
-    ? correctionRules.map((r) => `<tr data-rule-id="${esc(r.id)}">
+    <div class="correction-summary-actions">
+      <span class="correction-hint">所有规则默认生效，修改后自动保存</span>
+      <button class="btn btn-primary btn-sm" data-action="add" ${correctionDraft ? "disabled" : ""}>＋ 新增规则</button>
+    </div>`;
+  const rows = correctionRules.map((r) => `<tr data-rule-id="${esc(r.id)}">
         <td><input type="text" data-field="wrong_text" value="${esc(r.wrong_text)}" aria-label="错误文本"></td>
         <td><input type="text" data-field="correct_text" value="${esc(r.correct_text)}" aria-label="正确文本"></td>
-        <td>${Number(r.hit_count || 0)}</td>
-        <td>${fmtConfidence(r.confidence)}</td>
-        <td><label class="correction-switch" title="启用后会应用于后续生成的纪要"><input type="checkbox" data-field="enabled" aria-label="启用规则" ${Number(r.enabled) === 1 ? "checked" : ""}><span></span></label></td>
+        <td><span class="correction-count">${Number(r.hit_count || 0)}</span></td>
         <td>${esc(String(r.updated_at || r.created_at || "").replace("T", " ").slice(0, 19))}</td>
-        <td><div class="correction-actions"><button class="btn btn-secondary btn-sm" data-action="save">保存</button><button class="cat-icon-btn cat-icon-danger" data-action="delete" title="删除规则" aria-label="删除规则">×</button></div></td>
-      </tr>`).join("")
-    : `<tr><td colspan="7" class="correction-empty"><div class="correction-empty-icon">✓</div><div class="correction-empty-title">暂无纠错规则</div><div class="correction-empty-sub">编辑纪要中的错词后，候选规则会自动沉淀在这里</div></td></tr>`;
+        <td><div class="correction-actions"><span class="correction-save-state"></span><button class="correction-delete-btn" data-action="delete" title="删除规则" aria-label="删除规则">删除</button></div></td>
+      </tr>`).join("");
+  const draft = correctionDraft ? `<tr data-new-rule class="correction-draft-row">
+      <td><input type="text" data-field="wrong_text" value="" placeholder="输入错误文本" aria-label="新规则错误文本"></td>
+      <td><input type="text" data-field="correct_text" value="" placeholder="输入正确文本" aria-label="新规则正确文本"></td>
+      <td>—</td>
+      <td class="correction-draft-tip">填写完成后自动创建</td>
+      <td><div class="correction-actions"><span class="correction-save-state"></span><button class="correction-cancel-btn" data-action="cancel" title="取消新增" aria-label="取消新增">取消</button></div></td>
+    </tr>` : "";
+  el("#correction-body").innerHTML = draft + rows || `<tr><td colspan="5" class="correction-empty"><div class="correction-empty-icon">✓</div><div class="correction-empty-title">暂无纠错规则</div><div class="correction-empty-sub">点击“新增规则”直接维护，或在纪要中纠正错词后自动沉淀</div></td></tr>`;
 }
-async function saveCorrectionRule(row) {
-  const id = row.dataset.ruleId;
+async function persistCorrectionRow(row) {
+  const isNew = row.hasAttribute("data-new-rule");
   const payload = {
     wrong_text: row.querySelector('[data-field="wrong_text"]').value.trim(),
     correct_text: row.querySelector('[data-field="correct_text"]').value.trim(),
-    enabled: row.querySelector('[data-field="enabled"]').checked,
   };
-  const data = await api(`/api/corrections/${encodeURIComponent(id)}`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  if (!payload.wrong_text || !payload.correct_text) return;
+  if (payload.wrong_text === payload.correct_text) {
+    row.querySelector(".correction-save-state").textContent = "两项不能相同";
+    return;
+  }
+  const state = row.querySelector(".correction-save-state");
+  state.textContent = "保存中…";
+  const id = row.dataset.ruleId;
+  const data = await api(isNew ? "/api/corrections" : `/api/corrections/${encodeURIComponent(id)}`, {
+    method: isNew ? "POST" : "PUT",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
-  correctionRules = correctionRules.map((r) => r.id === id ? data.rule : r);
+  if (isNew) {
+    correctionDraft = false;
+    correctionRules.unshift(data.rule);
+  } else {
+    correctionRules = correctionRules.map((r) => r.id === id ? data.rule : r);
+  }
   renderCorrections();
 }
 async function deleteCorrectionRule(row) {
@@ -1205,6 +1221,7 @@ async function deleteCorrectionRule(row) {
   renderCorrections();
 }
 async function openCorrectionModal() {
+  correctionDraft = false;
   el("#correction-summary").textContent = "加载中…";
   el("#correction-body").innerHTML = "";
   el("#correction-modal").hidden = false;
@@ -1220,17 +1237,46 @@ function closeCorrectionModal() { el("#correction-modal").hidden = true; }
 el("#btn-correction-open").addEventListener("click", openCorrectionModal);
 el("#correction-close").addEventListener("click", closeCorrectionModal);
 el("#correction-modal").addEventListener("click", (e) => { if (e.target.id === "correction-modal") closeCorrectionModal(); });
+el("#correction-summary").addEventListener("click", (e) => {
+  if (!e.target.closest('[data-action="add"]')) return;
+  if (correctionDraft) return;
+  correctionDraft = true;
+  renderCorrections();
+  el('#correction-body [data-new-rule] [data-field="wrong_text"]')?.focus();
+});
 el("#correction-body").addEventListener("click", async (e) => {
   const button = e.target.closest("[data-action]");
-  const row = button?.closest("[data-rule-id]");
+  const row = button?.closest("[data-rule-id], [data-new-rule]");
   if (!button || !row) return;
-  button.disabled = true;
+  if (button.dataset.action === "cancel") {
+    correctionDraft = false;
+    renderCorrections();
+    return;
+  }
+  if (button.dataset.action !== "delete") return;
   try {
-    if (button.dataset.action === "save") await saveCorrectionRule(row);
-    else if (button.dataset.action === "delete") await deleteCorrectionRule(row);
+    await deleteCorrectionRule(row);
   } catch (err) {
-    alert(`${button.dataset.action === "save" ? "保存" : "删除"}失败：${err.message}`);
-    button.disabled = false;
+    alert(`删除失败：${err.message}`);
+  }
+});
+el("#correction-body").addEventListener("input", (e) => {
+  if (!e.target.matches('[data-field="wrong_text"], [data-field="correct_text"]')) return;
+  const row = e.target.closest("[data-rule-id], [data-new-rule]");
+  clearTimeout(correctionSaveTimers.get(row));
+  correctionSaveTimers.set(row, setTimeout(async () => {
+    try {
+      await persistCorrectionRow(row);
+    } catch (err) {
+      row.querySelector(".correction-save-state").textContent = "保存失败";
+      alert(`保存失败：${err.message}`);
+    }
+  }, 450));
+});
+el("#correction-body").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.matches('[data-field="wrong_text"], [data-field="correct_text"]')) {
+    e.preventDefault();
+    e.target.blur();
   }
 });
 

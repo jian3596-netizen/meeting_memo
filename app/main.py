@@ -403,6 +403,21 @@ def get_corrections() -> Dict:
     return {"rules": db.list_correction_rules()}
 
 
+@app.post("/api/corrections")
+def create_correction(req: CorrectionRuleUpdate) -> Dict:
+    wrong_text = req.wrong_text.strip()
+    correct_text = req.correct_text.strip()
+    if not wrong_text or not correct_text:
+        raise HTTPException(400, "错误文本和正确文本不能为空")
+    if wrong_text == correct_text:
+        raise HTTPException(400, "错误文本和正确文本不能相同")
+    try:
+        rule = db.create_correction_rule(wrong_text, correct_text)
+    except ValueError as exc:
+        raise HTTPException(409, "相同的纠错规则已经存在") from exc
+    return {"rule": rule}
+
+
 @app.put("/api/corrections/{rule_id}")
 def update_correction(rule_id: str, req: CorrectionRuleUpdate) -> Dict:
     wrong_text = req.wrong_text.strip()
@@ -412,7 +427,7 @@ def update_correction(rule_id: str, req: CorrectionRuleUpdate) -> Dict:
     if wrong_text == correct_text:
         raise HTTPException(400, "错误文本和正确文本不能相同")
     try:
-        rule = db.update_correction_rule(rule_id, wrong_text, correct_text, req.enabled)
+        rule = db.update_correction_rule(rule_id, wrong_text, correct_text)
     except ValueError as exc:
         raise HTTPException(409, "相同的纠错规则已经存在") from exc
     if not rule:

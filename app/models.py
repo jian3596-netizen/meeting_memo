@@ -89,7 +89,6 @@ class SummaryUpdateRequest(BaseModel):
 class CorrectionRuleUpdate(BaseModel):
     wrong_text: str
     correct_text: str
-    enabled: bool = False
 
 
 # ---------- API ----------

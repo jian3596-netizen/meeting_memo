@@ -110,7 +110,7 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 
 ## 自动纠错库（v1.1）
 
-系统会根据你在编辑器里的人工核验结果自动维护领域纠错库，不需要单独手工维护术语文档。
+系统会根据你在编辑器里的人工核验结果自动维护领域纠错库，也支持在前端「纠错库」表格中手动新增、编辑和删除规则。
 
 流程：
 
@@ -118,20 +118,21 @@ docker load < meeting-memo.tar.gz                              # 目标机：导
 AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽取候选纠错 -> 写入 correction_rules
 ```
 
-规则启用策略偏保守：
+规则维护策略：
 
 - 新前端会按实际编辑字段提交修改前后文本，并记录一条 `correction_events` 编辑事件；旧客户端仍兼容整份纪要比较。
 - 只抽取短文本替换候选，避免把整句润色、删减、结构调整误当成 ASR 纠错。
-- 同一条 `wrong_text -> correct_text` 累计出现 3 次后自动启用。
-- 已启用规则会在新会议清洗转写后本地应用，不额外消耗 LLM token。
-- 历史会议重新生成纪要时，也会先应用已启用规则并回写转写 clean_text。
+- 所有合法的 `wrong_text -> correct_text` 规则创建后立即生效，无需单独开启。
+- 规则可以由人工编辑自动沉淀，也可以在纠错库中手动增加；表格修改后自动保存。
+- 规则会在新会议清洗转写后本地应用，不额外消耗 LLM token。
+- 历史会议重新生成纪要时，也会先应用纠错规则并回写转写 clean_text。
 
 内部表：
 
 | 表 | 说明 |
 | --- | --- |
 | `correction_events` | 保存每次纪要编辑前后的文本和候选纠错 |
-| `correction_rules` | 累计后的纠错规则、命中次数、置信度、启用状态 |
+| `correction_rules` | 纠错规则、命中次数及内部质量信息 |
 
 ## API（PRD 第 7 节）
 
@@ -150,7 +151,8 @@ AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽�
 | GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
 | GET | `/api/categories` ｜ PUT | 分类库（名称 + 总结 Prompt + 有序章节及章节 Prompt）读取 / 保存 |
 | GET | `/api/hotwords` ｜ PUT | 热词词库 读取 / 保存 |
-| GET | `/api/corrections` | 查看自动沉淀的纠错规则（前端「纠错库」表格） |
+| GET / POST | `/api/corrections` | 查看或手动增加纠错规则（前端「纠错库」表格） |
+| PUT / DELETE | `/api/corrections/{id}` | 自动保存修改或删除纠错规则 |
 | GET | `/api/voiceprints` | 声纹库列表 |
 | DELETE | `/api/voiceprints?name=` | 删除某人全部声纹模板 |
 | POST | `/api/meetings/{id}/voiceprints` | 从该会议某说话人注册声纹（body：speaker + name） |
