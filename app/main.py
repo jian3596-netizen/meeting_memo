@@ -99,6 +99,16 @@ def _summary_correction_protected_terms(mid: str, meeting: Dict, segments: List)
     return cleaned
 
 
+def _missing_speaker_names(mid: str) -> List[str]:
+    """返回尚未录入姓名/角色的原始说话人标签。"""
+    speakers = {
+        (row.get("speaker") or "SPEAKER_00").strip()
+        for row in db.get_segment_rows(mid)
+    }
+    mapping = db.get_speaker_map(mid)
+    return sorted(spk for spk in speakers if not (mapping.get(spk) or "").strip())
+
+
 def _content_disposition(filename: str) -> str:
     """RFC 5987：HTTP 头只能 latin-1，中文文件名需用 filename* 编码。"""
     ascii_fallback = filename.encode("ascii", "ignore").decode("ascii") or "meeting"
@@ -445,7 +455,19 @@ def delete_correction(rule_id: str) -> Dict:
 # ---------------- 重新生成（7.5） ----------------
 @app.post("/api/meetings/{mid}/regenerate", response_model=CreateMeetingResponse)
 def regenerate(mid: str, req: RegenerateRequest) -> CreateMeetingResponse:
-    _require(mid)
+    meeting = _require(mid)
+    if meeting.get("status") in {"uploaded", "processing_audio", "transcribing", "cleaning_text"}:
+        raise HTTPException(status_code=409, detail="语音尚未识别完成")
+    if meeting.get("status") == "summarizing":
+        raise HTTPException(status_code=409, detail="会议纪要正在生成，请稍候")
+    if not db.get_segment_rows(mid):
+        raise HTTPException(status_code=400, detail="没有可用的转写，无法生成会议纪要")
+    missing = _missing_speaker_names(mid)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"请先录入全部说话人：{', '.join(missing)}",
+        )
     db.set_status(mid, "summarizing", 80)
     _spawn(pipeline.regenerate, mid, req.category, req.custom_instruction)
     return CreateMeetingResponse(meeting_id=mid, status="summarizing")
@@ -455,6 +477,14 @@ def regenerate(mid: str, req: RegenerateRequest) -> CreateMeetingResponse:
 @app.post("/api/meetings/{mid}/speakers")
 def update_speakers(mid: str, mapping: Dict[str, str]) -> Dict:
     _require(mid)
+    known_speakers = {
+        row.get("speaker") or "SPEAKER_00" for row in db.get_segment_rows(mid)
+    }
+    mapping = {
+        spk: (name or "").strip()
+        for spk, name in mapping.items()
+        if spk in known_speakers and (name or "").strip()
+    }
     prev = db.get_speaker_map(mid)
     db.set_speaker_map(mid, mapping)
     # 改名后，把纪要/待办里的旧名（原始 SPEAKER_xx 或上一轮的显示名）替换为新名

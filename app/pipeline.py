@@ -1,6 +1,7 @@
 """处理流水线编排（PRD 第 8 节状态机）。
 
-uploaded → processing_audio → transcribing → cleaning_text → summarizing → completed
+uploaded → processing_audio → transcribing → cleaning_text → transcribed
+用户确认说话人后，再由界面触发 summarizing → completed。
 （DashScope 在 transcribing 一步内完成转写+分轨）。任一步失败 → failed，记录 failed_step。
 """
 
@@ -30,7 +31,7 @@ _worker_started = False
 _worker_lock = threading.Lock()
 
 # 非终态（崩溃/重启后需要重新入队继续处理）
-PENDING_STATES = {"uploaded", "processing_audio", "transcribing", "cleaning_text", "summarizing"}
+PENDING_STATES = {"uploaded", "processing_audio", "transcribing", "cleaning_text"}
 
 
 def _worker_loop() -> None:
@@ -64,6 +65,12 @@ def requeue_pending() -> None:
     for m in db.list_meetings():
         if m.get("status") in PENDING_STATES:
             enqueue_meeting(m["id"])
+        elif m.get("status") == "summarizing":
+            # LLM 调用无法从中断点续跑；保留已有转写，回到可手动重试的状态。
+            if db.get_segment_rows(m["id"]):
+                db.set_status(m["id"], "transcribed", 75)
+            else:
+                enqueue_meeting(m["id"])
 
 
 def _auto_match_speakers(mid: str, spk_embeddings: dict) -> None:
@@ -226,26 +233,11 @@ def process_meeting(mid: str) -> None:
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
-        # 4. 结构化纪要
-        step = "summarizing"
-        db.set_status(mid, "summarizing", 80)
-        apply_speaker_map(segments, db.get_speaker_map(mid))
-        cat_name, cat_focus, sections = _resolve_category(meeting.get("category"))
-        summary = get_llm().summarize(
-            segments,
-            cat_name,
-            cat_focus,
-            sections,
-            meeting_description=meeting.get("description"),
-        )
-        _persist_summary(mid, summary, segments, config.LLM_MODEL)
-        db.update_meeting(mid, title=summary.title)
-
-        # 5. 完成
-        db.set_status(mid, "completed", 100)
+        # 4. 转写已保存。纪要必须等用户确认全部说话人后手动触发。
+        db.set_status(mid, "transcribed", 75)
 
         # 转写成功后删除原始上传文件（界面回放只用 processed），省空间。
-        # 仅在完成后删，失败的保留原文件以便重试/重排。
+        # 仅在转写成功后删，失败的保留原文件以便重试/重排。
         try:
             orig = meeting.get("audio_path")
             if orig and orig != str(processed) and Path(orig).exists():

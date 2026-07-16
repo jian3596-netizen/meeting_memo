@@ -299,6 +299,7 @@ select.field { cursor: pointer; }
 }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .badge.completed { background: var(--color-success-light); color: var(--color-success); }
+.badge.ready { background: var(--color-primary-light); color: var(--color-primary-dark); }
 .badge.failed { background: var(--color-danger-light); color: var(--color-danger); }
 .badge.running { background: var(--color-warning-light); color: var(--color-warning); }
 .badge.running::before { animation: pulse 1.2s infinite; }
@@ -339,6 +340,10 @@ audio { width: 100%; display: block; }
 #speaker-edit .row .field { flex: 1; }
 
 /* 纪要 */
+.summary-card-title { display: flex; align-items: center; gap: 8px; }
+.summary-card-title #btn-generate-summary { margin-left: auto; }
+.summary-empty { color: var(--color-text-tertiary); text-align: center; padding: 48px 16px; line-height: 1.8; }
+.summary-empty .empty-icon { font-size: 30px; margin-bottom: 6px; }
 #summary-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .sum-summary { font-size: 14px; line-height: 1.75; background: var(--color-primary-lighter); border-left: 3px solid var(--color-primary); padding: 12px 14px; border-radius: var(--r-md); margin-bottom: 16px; }
 .sum-block { margin-bottom: 16px; }

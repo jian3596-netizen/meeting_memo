@@ -1,6 +1,6 @@
 # AI 会议纪要系统（上传音频文件版 · MVP）
 
-上传会议音频 → **本地**转写 + 说话人分轨 → AI 结构化纪要 + 待办提取 → 在线查看/改名/导出，
+上传会议音频 → **本地**转写 + 说话人分轨并保存 → 人工确认每位 Speaker → 手动生成 AI 结构化纪要 + 待办 → 在线编辑/导出，
 每条结论可点击时间戳回听原音频。单机运行，音频不出本机。
 
 ## 技术栈
@@ -145,8 +145,8 @@ AI 纪要初稿 -> 人工编辑保存 -> 对比保存前/保存后文本 -> 抽�
 | GET | `/api/meetings/{id}/transcript` | 转写全文（带说话人/时间戳） |
 | GET | `/api/meetings/{id}/summary` | 结构化纪要 JSON |
 | PUT | `/api/meetings/{id}/summary` | 保存编辑后的纪要 |
-| POST | `/api/meetings/{id}/regenerate` | 换分类/加指令重新生成（仅重跑总结） |
-| POST | `/api/meetings/{id}/speakers` | 说话人改名 |
+| POST | `/api/meetings/{id}/regenerate` | 首次生成或重新生成纪要（要求所有 Speaker 已录入） |
+| POST | `/api/meetings/{id}/speakers` | 保存 Speaker 与真实姓名/角色的映射 |
 | GET | `/api/meetings/{id}/audio` | 音频流（时间戳回听） |
 | GET | `/api/meetings/{id}/export?format=md\|docx` | 导出 |
 | GET | `/api/categories` ｜ PUT | 分类库（名称 + 总结 Prompt + 有序章节及章节 Prompt）读取 / 保存 |

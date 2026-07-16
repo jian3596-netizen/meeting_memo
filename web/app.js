@@ -20,6 +20,7 @@ const STATUS_LABEL = {
   processing_audio: "音频处理中",
   transcribing: "转写 + 说话人分离中",
   cleaning_text: "文本清洗中",
+  transcribed: "转写完成，待确认说话人",
   summarizing: "生成 AI 纪要中",
   completed: "已完成",
   failed: "处理失败",
@@ -69,7 +70,9 @@ async function api(path, opts) {
   }
   return r.json();
 }
-function statusClass(s) { return s === "completed" ? "completed" : s === "failed" ? "failed" : "running"; }
+function statusClass(s) {
+  return s === "completed" ? "completed" : s === "transcribed" ? "ready" : s === "failed" ? "failed" : "running";
+}
 function fillDatalist(sel, arr) { el(sel).innerHTML = arr.map((v) => `<option value="${esc(v)}">`).join(""); }
 
 // ---------- 时间戳回听（转写 .ts 与 纪要 .src 共用） ----------
@@ -124,7 +127,7 @@ async function loadLibrary() {
 
 // ---------- 处理队列（右上角） ----------
 function pendingMeetings() {
-  return allMeetings.filter((m) => m.status !== "completed");  // 排队中/处理中/失败
+  return allMeetings.filter((m) => !["completed", "transcribed"].includes(m.status));
 }
 function updateQueueBadge() {
   const n = pendingMeetings().length;
@@ -397,18 +400,18 @@ function buildFilterOptions() {
 function renderCards() {
   const grid = el("#card-grid");
   const empty = el("#lib-empty");
-  // 录音库只展示「已完成」；处理中/失败的在右上角「队列」里看
-  const completed = allMeetings.filter((m) => m.status === "completed");
-  if (!completed.length) {
+  // 转写完成后即可进录音库确认说话人；处理中/失败的在右上角「队列」里看。
+  const available = allMeetings.filter((m) => ["transcribed", "completed"].includes(m.status));
+  if (!available.length) {
     grid.innerHTML = "";
     empty.hidden = false;
-    empty.innerHTML = `<div class="empty-icon">📋</div><div class="empty-title">还没有已完成的录音</div>
-      <div class="empty-sub">点右上角「＋ 上传录音」开始；处理进度看「队列」</div>`;
+    empty.innerHTML = `<div class="empty-icon">📋</div><div class="empty-title">还没有识别完成的录音</div>
+      <div class="empty-sub">点右上角「＋ 上传录音」开始语音识别；处理进度看「队列」</div>`;
     return;
   }
   const q = el("#lib-search").value.trim().toLowerCase();
   const cat = el("#lib-category").value;
-  const list = completed.filter((m) => {
+  const list = available.filter((m) => {
     if (cat && (m.category || "") !== cat) return false;
     if (activeTagFilter.size) {
       const mt = new Set(m.tags || []);
@@ -440,6 +443,7 @@ function renderCards() {
 function rowHtml(m) {
   const muted = `<span class="lib-muted">—</span>`;
   const title = esc(m.title || "未命名会议");
+  const awaitingSummary = m.status === "transcribed" ? `<span class="tag tag-mini">待生成纪要</span>` : "";
   const cat = m.category ? esc(m.category) : muted;
   const desc = m.description ? esc(m.description) : "";
   const atime = m.audio_time || fmtDate(m.created_at);
@@ -450,11 +454,11 @@ function rowHtml(m) {
     : muted;
   return `<tr class="lib-row" data-id="${m.meeting_id}">
     <td class="lib-edit lib-cat" data-field="category" title="双击编辑分类">${cat}</td>
-    <td class="lib-edit lib-titlecell" data-field="title" title="${title}"><div class="lib-title">${title}</div></td>
+    <td class="lib-edit lib-titlecell" data-field="title" title="${title}"><div class="lib-title">${title} ${awaitingSummary}</div></td>
     <td class="lib-edit lib-desccell" data-field="description" title="${esc(m.description || "")}"><div class="lib-desc">${desc || muted}</div></td>
     <td class="lib-edit lib-nowrap" data-field="audio_time" title="双击编辑（如 2026-06-22）">${esc(atime) || muted}</td>
     <td class="lib-nowrap">${fmtDur(m.duration_sec)}</td>
-    <td class="lib-people" title="${esc(peopleStr)}（由声纹识别，不可手动改）">${people}</td>
+    <td class="lib-people" title="${esc(peopleStr)}">${people}</td>
     <td class="lib-edit lib-tagcell" data-field="tags" title="双击编辑（顿号/逗号分隔）">${tags}</td>
     <td class="lib-ops"><button class="rec-btn rec-view" title="查看详情">👁</button></td>
   </tr>`;
@@ -519,7 +523,7 @@ function inlineSelectCategory(td, m) {
     try {
       await saveMetaField(m, { category: val });
       // 分类变了 → 询问是否按新分类的 Prompt 重新生成纪要
-      if (val && confirm(`已改为「${val}」分类。是否按该分类的 Prompt 重新生成会议纪要？`)) {
+      if (m.status === "completed" && val && confirm(`已改为「${val}」分类。是否按该分类的 Prompt 重新生成会议纪要？`)) {
         await api(`/api/meetings/${m.meeting_id}/regenerate`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ category: val }),
@@ -566,7 +570,7 @@ function openMetaDrawer(id) {
   el("#meta-category").value = m.category || "";
   el("#meta-desc").value = m.description || "";
   el("#meta-audio-time").value = m.audio_time || fmtDate(m.created_at);
-  el("#meta-people-view").textContent = (m.participants || []).join("、") || "（声纹识别后自动出现）";
+  el("#meta-people-view").textContent = (m.participants || []).join("、") || "（在会议详情中录入说话人后显示）";
   tagChips.set(m.tags || []);
   fillDatalist("#category-options", allCategories());
   fillDatalist("#tag-options", allTags());
@@ -828,18 +832,21 @@ el("#voiceprint-modal").addEventListener("click", (e) => { if (e.target.id === "
 // ---------- 选择 / 轮询 ----------
 async function selectMeeting(id) {
   currentId = id;
+  currentSummary = null;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   el("#error-area").innerHTML = "";
   el("#result").hidden = true;
   el("#audio-card").hidden = true;
   el("#processing").hidden = true;
+  el("#btn-export-md").hidden = true;
+  el("#btn-export-docx").hidden = true;
 
   const m = await api(`/api/meetings/${id}`);
   renderHeader(m);
   el("#btn-export-md").href = `/api/meetings/${id}/export?format=md`;
   el("#btn-export-docx").href = `/api/meetings/${id}/export?format=docx`;
 
-  if (m.status === "completed") {
+  if (["transcribed", "completed"].includes(m.status)) {
     await renderResults(id);
   } else if (m.status === "failed") {
     showError(m);
@@ -883,7 +890,7 @@ function startPoll(id) {
     const badge = el("#m-status");
     badge.textContent = STATUS_LABEL[s.status] || s.status;
     badge.className = "badge " + (RUNNING.has(s.status) ? "running" : statusClass(s.status));
-    if (s.status === "completed") {
+    if (["transcribed", "completed"].includes(s.status)) {
       clearInterval(pollTimer); pollTimer = null;
       el("#processing").hidden = true;
       renderHeader(await api(`/api/meetings/${id}`));
@@ -908,10 +915,22 @@ async function renderResults(id) {
     api(`/api/meetings/${id}`),
   ]);
   currentSummary = sum;
+  updateSummaryActions(sum, meta.status);
   renderTranscript(tr.segments);
   renderSpeakerEdit(tr.segments, meta.speaker_map || {});
   renderSummary(sum);
   renderTodos(sum ? sum.todos : []);
+}
+
+function updateSummaryActions(sum, status) {
+  const btn = el("#btn-generate-summary");
+  const hasSummary = Boolean(sum);
+  btn.textContent = hasSummary ? "重新生成" : "生成会议纪要";
+  btn.className = `btn ${hasSummary ? "btn-secondary" : "btn-primary"} btn-sm`;
+  btn.disabled = status === "summarizing";
+  el("#summary-edit-hint").textContent = hasSummary ? "双击文字可编辑" : "确认全部说话人后生成";
+  el("#btn-export-md").hidden = !hasSummary;
+  el("#btn-export-docx").hidden = !hasSummary;
 }
 
 function renderTranscript(segs) {
@@ -928,14 +947,14 @@ function renderSpeakerEdit(segs, speakerMap) {
   const speakers = [...new Set(segs.map((s) => s.speaker))];
   if (!speakers.length) { el("#speaker-edit").innerHTML = ""; return; }
   el("#speaker-edit").innerHTML = `
-    <div class="se-title">说话人改名 / 声纹</div>
+    <div class="se-title">录入说话人 <span class="card-title-sub">生成纪要前请确认每位 Speaker</span></div>
     ${speakers.map((sp) => `
       <div class="row">
         <label>${esc(sp)}</label>
         <input type="text" class="field" data-spk="${esc(sp)}" value="${esc(speakerMap[sp] || "")}" placeholder="真实姓名 / 角色">
         <button class="btn btn-ghost btn-sm vp-enroll" data-spk="${esc(sp)}" title="保存该说话人的声纹，以后新会议自动识别">存声纹</button>
       </div>`).join("")}
-    <button id="save-speakers" class="btn btn-secondary btn-sm" style="margin-top:6px">保存改名</button>`;
+    <button id="save-speakers" class="btn btn-secondary btn-sm" style="margin-top:6px">保存说话人</button>`;
   el("#save-speakers").addEventListener("click", saveSpeakers);
   el("#speaker-edit").querySelectorAll(".vp-enroll").forEach((b) =>
     b.addEventListener("click", () => enrollVoiceprint(b.dataset.spk, b)));
@@ -965,7 +984,7 @@ async function saveSpeakers() {
     renderTodos(sum ? sum.todos : []);
   } catch (e) {
     alert("保存失败：" + e.message);
-    btn.disabled = false; btn.textContent = "保存改名";
+    btn.disabled = false; btn.textContent = "保存说话人";
   }
 }
 
@@ -1052,7 +1071,10 @@ function bindInlineEditing(containerSel, rerender) {
 }
 
 function renderSummary(sum) {
-  if (!sum) { el("#summary-body").innerHTML = `<div class="unset">纪要尚未生成</div>`; return; }
+  if (!sum) {
+    el("#summary-body").innerHTML = `<div class="summary-empty"><div class="empty-icon">📝</div><div>纪要尚未生成</div><div class="card-title-sub">请先在左侧录入并确认全部说话人，再点击上方按钮。</div></div>`;
+    return;
+  }
   const ed = (path, html, ml) =>
     `<span class="editable" data-path="${path}"${ml ? ' data-multiline="1"' : ""} title="双击编辑">${html}</span>`;
   const srcEd = (path, ts) =>
@@ -1083,7 +1105,7 @@ function listBlock(title, items) {
 }
 
 function renderTodos(todos) {
-  el("#todos-card").hidden = Boolean(currentSummary?.sections?.length);
+  el("#todos-card").hidden = !currentSummary || Boolean(currentSummary?.sections?.length);
   todos = todos || [];
   const addBtn = `<button id="todo-add" class="btn btn-secondary btn-sm" style="margin-top:10px">+ 添加一行</button>`;
   if (!todos.length) {
@@ -1119,25 +1141,43 @@ function renderTodos(todos) {
   });
 }
 
-// ---------- 重新生成 / 删除 ----------
-el("#btn-regen").addEventListener("click", async () => {
+// ---------- 生成 / 重新生成 / 删除 ----------
+el("#btn-generate-summary").addEventListener("click", async () => {
   if (!currentId) return;
-  const btn = el("#btn-regen");
+  const btn = el("#btn-generate-summary");
+  const inputs = [...document.querySelectorAll("#speaker-edit input[data-spk]")];
+  const missing = inputs.filter((i) => !i.value.trim());
+  if (missing.length) {
+    alert(`请先录入全部说话人：${missing.map((i) => i.dataset.spk).join("、")}`);
+    missing[0].focus();
+    return;
+  }
+  const map = Object.fromEntries(inputs.map((i) => [i.dataset.spk, i.value.trim()]));
   btn.disabled = true;
+  btn.textContent = "生成中…";
   try {
+    // 生成前自动保存当前输入，确保 Prompt 使用最新的说话人信息。
+    await api(`/api/meetings/${currentId}/speakers`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(map),
+    });
     await api(`/api/meetings/${currentId}/regenerate`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         category: el("#m-category-sel").value,
       }),
     });
-    el("#result").hidden = true;
+    currentSummary = null;
+    renderSummary(null);
+    renderTodos([]);
+    updateSummaryActions(null, "summarizing");
     showProcessing({ status: "summarizing", progress: 80 });
     startPoll(currentId);
   } catch (e) {
-    alert("重新生成失败：" + e.message);
+    alert("生成会议纪要失败：" + e.message);
+    updateSummaryActions(currentSummary, "transcribed");
   } finally {
-    btn.disabled = false;
+    if (!pollTimer) btn.disabled = false;
   }
 });
 

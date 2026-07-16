@@ -51,7 +51,6 @@
         </div>
         <div class="actions">
           <select id="m-category-sel" class="field field-sm" title="分类（决定总结 Prompt）"></select>
-          <button id="btn-regen" class="btn btn-secondary btn-sm">重新生成</button>
           <a id="btn-export-md" class="btn btn-ghost btn-sm" target="_blank">导出 MD</a>
           <a id="btn-export-docx" class="btn btn-ghost btn-sm" target="_blank">导出 Word</a>
           <button id="btn-edit-meta" class="btn btn-ghost btn-sm">编辑信息</button>
@@ -81,8 +80,9 @@
             <div id="speaker-edit"></div>
           </section>
           <section class="card">
-            <div class="card-title">AI 纪要
-              <span class="card-title-sub">双击文字可编辑</span>
+            <div class="card-title summary-card-title">AI 纪要
+              <span id="summary-edit-hint" class="card-title-sub">确认说话人后生成</span>
+              <button id="btn-generate-summary" class="btn btn-primary btn-sm">生成会议纪要</button>
             </div>
             <div id="summary-body"></div>
           </section>
@@ -116,7 +116,7 @@
       <select id="upload-category" class="field" style="margin-top:4px"></select>
       <label class="edit-label" style="margin-top:12px;display:block">描述 / 背景信息 <span class="card-title-sub">会加入 AI Prompt</span></label>
       <textarea id="upload-description" class="edit-ta upload-description" rows="3" placeholder="例如：这是对某客户的首次拜访，重点了解现有方案、采购计划和关键联系人…"></textarea>
-      <button type="submit" id="upload-btn" class="btn btn-primary btn-block" style="margin-top:12px">上传并处理</button>
+      <button type="submit" id="upload-btn" class="btn btn-primary btn-block" style="margin-top:12px">上传并识别语音</button>
       <div id="upload-msg" class="hint">说话人数留空＝自动估计；知道几个人就填上，长录音更不易把多人并成一个。</div>
     </form>
   </div>
@@ -246,7 +246,7 @@
       <input type="text" id="meta-tag-input" class="field" list="tag-options" placeholder="输入标签，回车添加">
       <datalist id="tag-options"></datalist>
 
-      <label class="edit-label">人员 <span class="card-title-sub">由声纹识别，不可手动改</span></label>
+      <label class="edit-label">人员 <span class="card-title-sub">在会议详情中按 Speaker 录入</span></label>
       <div id="meta-people-view" class="meta-readonly"></div>
 
       <label class="edit-label">描述</label>
